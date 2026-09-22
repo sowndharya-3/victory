@@ -1800,7 +1800,7 @@ git commit -m "feat: add admin login gate, layout, and dashboard stats"
 
 ```jsx
 // src/pages/admin/AdminBooksPage.test.jsx
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { SessionProvider } from '../../context/SessionContext'
 import AdminBooksPage from './AdminBooksPage'
 
@@ -1818,9 +1818,20 @@ test('adding a book appends it unpublished, then publish toggles it', () => {
   fireEvent.click(within(row).getByRole('button', { name: /publish/i }))
   expect(row).toHaveTextContent(/published/i)
 })
-```
 
-Add `import { within } from '@testing-library/react'` alongside the other RTL imports in this file.
+test('editing a book updates its title via UPDATE_BOOK', () => {
+  render(<SessionProvider><AdminBooksPage /></SessionProvider>)
+
+  const row = screen.getByText('Success Mantra — Government Job Guide').closest('tr')
+  fireEvent.click(within(row).getByRole('button', { name: /^edit$/i }))
+
+  const editTitleInput = screen.getByLabelText(/edit title/i)
+  fireEvent.change(editTitleInput, { target: { value: 'Updated Title' } })
+  fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+
+  expect(screen.getByText('Updated Title')).toBeInTheDocument()
+})
+```
 
 - [ ] **Step 2: Run test, verify it fails**
 
@@ -1838,6 +1849,19 @@ function AdminBooksPage() {
   const [title, setTitle] = useState('')
   const [onlinePrice, setOnlinePrice] = useState('')
   const [hardCopyPrice, setHardCopyPrice] = useState('')
+  const [editingId, setEditingId] = useState(null)
+  const [editTitle, setEditTitle] = useState('')
+
+  const startEdit = (book) => {
+    setEditingId(book.id)
+    setEditTitle(book.title)
+  }
+
+  const handleSaveEdit = (e) => {
+    e.preventDefault()
+    dispatch({ type: 'UPDATE_BOOK', payload: { id: editingId, changes: { title: editTitle } } })
+    setEditingId(null)
+  }
 
   const handleAdd = (e) => {
     e.preventDefault()
@@ -1878,9 +1902,21 @@ function AdminBooksPage() {
         <tbody>
           {state.books.map(book => (
             <tr key={book.id}>
-              <td>{book.title}</td>
+              <td>
+                {editingId === book.id ? (
+                  <form onSubmit={handleSaveEdit}>
+                    <label htmlFor={`edit-title-${book.id}`}>Edit Title</label>
+                    <input id={`edit-title-${book.id}`} className="form-control" value={editTitle} onChange={e => setEditTitle(e.target.value)} required />
+                    <button type="submit">Save Changes</button>
+                    <button type="button" onClick={() => setEditingId(null)}>Cancel</button>
+                  </form>
+                ) : (
+                  book.title
+                )}
+              </td>
               <td>{book.published ? 'Published' : 'Unpublished'}</td>
               <td>
+                <button onClick={() => startEdit(book)}>Edit</button>
                 <button onClick={() => dispatch({ type: 'TOGGLE_PUBLISH', payload: { id: book.id } })}>
                   {book.published ? 'Unpublish' : 'Publish'}
                 </button>
