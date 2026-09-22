@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "todo-mcp": {
+      "command": "node",
+      "args": [
+        "c:\\Users\\sowndharya\\.vscode\\extensions\\hurtis.todo-mcp-2.0.0\\bin\\todo-mcp.js",
+        "--workspace",
+        "c:\\Client\\vtee\\__vtee"
+      ]
+    }
+  }
+}
