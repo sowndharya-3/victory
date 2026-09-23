@@ -15,7 +15,7 @@ test('does not show success message if required field missing', () => {
   render(<Contact />)
   fireEvent.click(screen.getByRole('button', { name: /submit enquiry/i }))
   expect(screen.queryByText(/thank you/i)).not.toBeInTheDocument()
-  expect(screen.getByText(/there was an error/i)).toBeInTheDocument()
+  expect(screen.getByText(/please fill all required fields/i)).toBeInTheDocument()
 })
 
 test('facilitator radio defaults to No and can be changed to Yes', () => {

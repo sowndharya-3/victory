@@ -58,14 +58,14 @@ function Contact() {
             <h3>Enquiry Form</h3>
 
             {submitted && (
-              <div className="form-success" style={{ display: 'block' }}>
+              <div className="form-success">
                 <i className="fas fa-check-circle"></i> Thank you! Your enquiry has been submitted successfully. We will contact you shortly.
               </div>
             )}
 
             {error && (
-              <div className="form-error" style={{ display: 'block' }}>
-                <i className="fas fa-exclamation-circle"></i> There was an error submitting your enquiry. Please try again or contact us directly.
+              <div className="form-error">
+                <i className="fas fa-exclamation-circle"></i> Please fill all required fields.
               </div>
             )}
 
