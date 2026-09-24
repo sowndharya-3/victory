@@ -74,27 +74,34 @@ test('LOGOUT_ADMIN clears admin', () => {
 
 test('APPROVE_REFERRAL approves and activates only the targeted partner', () => {
   const { result } = renderHook(() => useSession(), { wrapper })
+  // Target r1 (seed already approved/active); control r2 starts approved:false, active:false —
+  // the opposite of what APPROVE_REFERRAL sets, so a reducer that leaked the effect to every
+  // partner would flip r2 to true and this test would catch it.
   act(() => {
-    result.current.dispatch({ type: 'APPROVE_REFERRAL', payload: { id: 'r2' } })
+    result.current.dispatch({ type: 'APPROVE_REFERRAL', payload: { id: 'r1' } })
   })
-  const r2 = result.current.state.referralPartners.find(p => p.id === 'r2')
   const r1 = result.current.state.referralPartners.find(p => p.id === 'r1')
-  expect(r2.approved).toBe(true)
-  expect(r2.active).toBe(true)
-  expect(r1.approved).toBe(true) // unchanged (was already approved in seed)
+  const r2 = result.current.state.referralPartners.find(p => p.id === 'r2')
+  expect(r1.approved).toBe(true)
   expect(r1.active).toBe(true)
+  expect(r2.approved).toBe(false) // untouched — would flip to true if the reducer leaked
+  expect(r2.active).toBe(false)
 })
 
 test('REJECT_REFERRAL rejects only the targeted partner', () => {
   const { result } = renderHook(() => useSession(), { wrapper })
+  // Target r2 (seed already unapproved/inactive); control r1 starts approved:true, active:true —
+  // the opposite of what REJECT_REFERRAL sets, so a reducer that leaked the effect to every
+  // partner would flip r1 to false and this test would catch it.
   act(() => {
-    result.current.dispatch({ type: 'REJECT_REFERRAL', payload: { id: 'r1' } })
+    result.current.dispatch({ type: 'REJECT_REFERRAL', payload: { id: 'r2' } })
   })
-  const r1 = result.current.state.referralPartners.find(p => p.id === 'r1')
   const r2 = result.current.state.referralPartners.find(p => p.id === 'r2')
-  expect(r1.approved).toBe(false)
-  expect(r1.active).toBe(false)
-  expect(r2.approved).toBe(false) // untouched, unchanged from seed
+  const r1 = result.current.state.referralPartners.find(p => p.id === 'r1')
+  expect(r2.approved).toBe(false)
+  expect(r2.active).toBe(false)
+  expect(r1.approved).toBe(true) // untouched — would flip to false if the reducer leaked
+  expect(r1.active).toBe(true)
 })
 
 test('TOGGLE_REFERRAL_ACTIVE flips only the targeted partner active flag', () => {
