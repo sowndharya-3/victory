@@ -6,6 +6,7 @@ import BookDetailPage from './pages/BookDetailPage'
 import ReferralRegisterPage from './pages/ReferralRegisterPage'
 import CheckoutPage from './pages/CheckoutPage'
 import ReaderPage from './pages/ReaderPage'
+import AccountPage from './pages/AccountPage'
 
 function App() {
   return (
@@ -18,6 +19,7 @@ function App() {
           <Route path="/referral/register" element={<ReferralRegisterPage />} />
           <Route path="/checkout/:bookId" element={<CheckoutPage />} />
           <Route path="/read/:bookId" element={<ReaderPage />} />
+          <Route path="/account" element={<AccountPage />} />
         </Routes>
       </BrowserRouter>
     </SessionProvider>
