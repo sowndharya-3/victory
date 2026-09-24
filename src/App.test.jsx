@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import App from './App'
 
-test('renders without crashing', () => {
+test('renders home page heading', () => {
   render(<App />)
-  expect(screen.getByText('Home placeholder')).toBeInTheDocument()
+  expect(screen.getAllByText(/victory today educational enterprises/i).length).toBeGreaterThan(0)
 })
