@@ -74,34 +74,37 @@ test('LOGOUT_ADMIN clears admin', () => {
 
 test('APPROVE_REFERRAL approves and activates only the targeted partner', () => {
   const { result } = renderHook(() => useSession(), { wrapper })
-  // Target r1 (seed already approved/active); control r2 starts approved:false, active:false —
-  // the opposite of what APPROVE_REFERRAL sets, so a reducer that leaked the effect to every
-  // partner would flip r2 to true and this test would catch it.
+  // Target r2 (seed approved:false, active:false — the opposite of the post-approve state,
+  // so a no-op/deleted-case reducer fails assertion 1). Control r1 is checked by reference
+  // identity, not just value: the correct reducer's ternary returns the exact same object for
+  // non-matching items, so a reducer that leaked the effect to every partner (mapping
+  // unconditionally) would fail assertion 2 even though r1's values happen to already match.
+  const initialR1 = result.current.state.referralPartners.find(p => p.id === 'r1')
   act(() => {
-    result.current.dispatch({ type: 'APPROVE_REFERRAL', payload: { id: 'r1' } })
+    result.current.dispatch({ type: 'APPROVE_REFERRAL', payload: { id: 'r2' } })
   })
-  const r1 = result.current.state.referralPartners.find(p => p.id === 'r1')
   const r2 = result.current.state.referralPartners.find(p => p.id === 'r2')
-  expect(r1.approved).toBe(true)
-  expect(r1.active).toBe(true)
-  expect(r2.approved).toBe(false) // untouched — would flip to true if the reducer leaked
-  expect(r2.active).toBe(false)
+  const r1 = result.current.state.referralPartners.find(p => p.id === 'r1')
+  expect(r2.approved).toBe(true)
+  expect(r2.active).toBe(true)
+  expect(r1).toBe(initialR1) // untouched — same object reference, not just equal values
 })
 
 test('REJECT_REFERRAL rejects only the targeted partner', () => {
   const { result } = renderHook(() => useSession(), { wrapper })
-  // Target r2 (seed already unapproved/inactive); control r1 starts approved:true, active:true —
-  // the opposite of what REJECT_REFERRAL sets, so a reducer that leaked the effect to every
-  // partner would flip r1 to false and this test would catch it.
+  // Target r1 (seed approved:true, active:true — the opposite of the post-reject state, so a
+  // no-op/deleted-case reducer fails assertion 1). Control r2 is checked by reference identity:
+  // a reducer that leaked the effect to every partner (mapping unconditionally) would fail
+  // assertion 2 even though r2's values happen to already match.
+  const initialR2 = result.current.state.referralPartners.find(p => p.id === 'r2')
   act(() => {
-    result.current.dispatch({ type: 'REJECT_REFERRAL', payload: { id: 'r2' } })
+    result.current.dispatch({ type: 'REJECT_REFERRAL', payload: { id: 'r1' } })
   })
-  const r2 = result.current.state.referralPartners.find(p => p.id === 'r2')
   const r1 = result.current.state.referralPartners.find(p => p.id === 'r1')
-  expect(r2.approved).toBe(false)
-  expect(r2.active).toBe(false)
-  expect(r1.approved).toBe(true) // untouched — would flip to false if the reducer leaked
-  expect(r1.active).toBe(true)
+  const r2 = result.current.state.referralPartners.find(p => p.id === 'r2')
+  expect(r1.approved).toBe(false)
+  expect(r1.active).toBe(false)
+  expect(r2).toBe(initialR2) // untouched — same object reference, not just equal values
 })
 
 test('TOGGLE_REFERRAL_ACTIVE flips only the targeted partner active flag', () => {
