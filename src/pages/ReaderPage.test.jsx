@@ -51,6 +51,47 @@ test('blocks access when a paid order exists but purchaseType does not match', (
   expect(screen.getByText(/you don't have access/i)).toBeInTheDocument()
 })
 
+// Seeds a paid order for one customer (never logging in as them) while the
+// CURRENT session logs in as a different customer — proving the reader
+// checks order ownership against the logged-in customer, not just any order.
+function SeedPaidOrderForOtherCustomer({ orderEmail, sessionEmail, bookId, purchaseType, children }) {
+  const { state, dispatch } = useSession()
+  const order = state.orders.find(
+    o => o.bookId === bookId && o.purchaseType === purchaseType && o.customerEmail === orderEmail
+  )
+
+  useEffect(() => {
+    if (!order) {
+      dispatch({ type: 'CREATE_ORDER', payload: { bookId, purchaseType, customerEmail: orderEmail } })
+    } else if (order.paymentStatus !== 'paid') {
+      dispatch({ type: 'MARK_ORDER_PAID', payload: { orderId: order.id } })
+    } else if (state.customerEmail !== sessionEmail) {
+      dispatch({ type: 'LOGIN_CUSTOMER', payload: { email: sessionEmail } })
+    }
+  })
+
+  const ready = order?.paymentStatus === 'paid' && state.customerEmail === sessionEmail
+  return ready ? children : null
+}
+
+test('blocks access when the paid digital order belongs to a different customer', () => {
+  render(
+    <SessionProvider>
+      <SeedPaidOrderForOtherCustomer
+        orderEmail="other-customer@example.com"
+        sessionEmail="buyer@example.com"
+        bookId="b1"
+        purchaseType="digital"
+      >
+        <MemoryRouter initialEntries={['/read/b1']}>
+          <Routes><Route path="/read/:bookId" element={<ReaderPage />} /></Routes>
+        </MemoryRouter>
+      </SeedPaidOrderForOtherCustomer>
+    </SessionProvider>
+  )
+  expect(screen.getByText(/you don't have access/i)).toBeInTheDocument()
+})
+
 test('grants access when a paid digital order matches book and customer', () => {
   render(
     <SessionProvider>
