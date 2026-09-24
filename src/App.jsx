@@ -7,6 +7,8 @@ import ReferralRegisterPage from './pages/ReferralRegisterPage'
 import CheckoutPage from './pages/CheckoutPage'
 import ReaderPage from './pages/ReaderPage'
 import AccountPage from './pages/AccountPage'
+import AdminLayout from './pages/admin/AdminLayout'
+import AdminDashboardPage from './pages/admin/AdminDashboardPage'
 
 function App() {
   return (
@@ -20,6 +22,9 @@ function App() {
           <Route path="/checkout/:bookId" element={<CheckoutPage />} />
           <Route path="/read/:bookId" element={<ReaderPage />} />
           <Route path="/account" element={<AccountPage />} />
+          <Route path="/admin" element={<AdminLayout />}>
+            <Route index element={<AdminDashboardPage />} />
+          </Route>
         </Routes>
       </BrowserRouter>
     </SessionProvider>
