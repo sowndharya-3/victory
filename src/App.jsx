@@ -9,6 +9,7 @@ import ReaderPage from './pages/ReaderPage'
 import AccountPage from './pages/AccountPage'
 import AdminLayout from './pages/admin/AdminLayout'
 import AdminDashboardPage from './pages/admin/AdminDashboardPage'
+import AdminBooksPage from './pages/admin/AdminBooksPage'
 
 function App() {
   return (
@@ -24,6 +25,7 @@ function App() {
           <Route path="/account" element={<AccountPage />} />
           <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<AdminDashboardPage />} />
+            <Route path="books" element={<AdminBooksPage />} />
           </Route>
         </Routes>
       </BrowserRouter>
