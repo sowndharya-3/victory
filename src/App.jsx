@@ -4,6 +4,7 @@ import HomePage from './pages/HomePage'
 import BooksPage from './pages/BooksPage'
 import BookDetailPage from './pages/BookDetailPage'
 import ReferralRegisterPage from './pages/ReferralRegisterPage'
+import CheckoutPage from './pages/CheckoutPage'
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
           <Route path="/books" element={<BooksPage />} />
           <Route path="/books/:id" element={<BookDetailPage />} />
           <Route path="/referral/register" element={<ReferralRegisterPage />} />
+          <Route path="/checkout/:bookId" element={<CheckoutPage />} />
         </Routes>
       </BrowserRouter>
     </SessionProvider>
