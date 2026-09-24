@@ -1,10 +1,7 @@
 import { useState } from 'react'
 import { useSession } from '../context/SessionContext'
 import Header from '../components/home/Header'
-// ponytail: Footer's fixed "Chat on WhatsApp" floating link shares the
-// "whatsapp" accessible name with this form's WhatsApp field, which makes
-// getByLabelText(/whatsapp/i) ambiguous. Omitting Footer here avoids that
-// collision; revisit if Footer's floating link ever gets a distinct label.
+import Footer from '../components/home/Footer'
 
 const FIELDS = [
   ['name', 'Name', 'text'],
@@ -56,6 +53,7 @@ function ReferralRegisterPage() {
           </form>
         )}
       </section>
+      <Footer />
     </>
   )
 }

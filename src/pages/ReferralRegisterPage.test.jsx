@@ -15,7 +15,7 @@ test('submits all 9 fields and shows confirmation', () => {
   fireEvent.change(screen.getByLabelText(/district/i), { target: { value: 'Erode' } })
   fireEvent.change(screen.getByLabelText(/status/i), { target: { value: 'Student' } })
   fireEvent.change(screen.getByLabelText(/phone number/i), { target: { value: '9111111111' } })
-  fireEvent.change(screen.getByLabelText(/whatsapp/i), { target: { value: '9111111111' } })
+  fireEvent.change(screen.getByLabelText('WhatsApp Number'), { target: { value: '9111111111' } })
   fireEvent.change(screen.getByLabelText(/gpay.*phonepe/i), { target: { value: 'test@okaxis' } })
   fireEvent.change(screen.getByLabelText(/gmail/i), { target: { value: 'test@gmail.com' } })
   fireEvent.click(screen.getByRole('button', { name: /register/i }))
