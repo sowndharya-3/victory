@@ -13,6 +13,6 @@ test('toggles nav menu open class on button click', () => {
 
 test('renders Books and referral nav links', () => {
   render(<MemoryRouter><Header /></MemoryRouter>)
-  expect(screen.getByRole('link', { name: /books/i })).toHaveAttribute('href', '/books')
+  expect(screen.getByRole('link', { name: 'Books' })).toHaveAttribute('href', '/books')
   expect(screen.getByRole('link', { name: /become a referral partner/i })).toHaveAttribute('href', '/referral/register')
 })

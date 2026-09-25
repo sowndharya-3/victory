@@ -7,3 +7,9 @@ global.IntersectionObserver = class IntersectionObserver {
   unobserve() {}
   disconnect() {}
 }
+
+// ponytail: SessionContext now persists to localStorage — clear it between
+// tests so each test starts from the seed state, not a prior test's writes.
+beforeEach(() => {
+  localStorage.clear()
+})

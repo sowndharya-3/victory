@@ -1,14 +1,29 @@
-import { createContext, useContext, useReducer } from 'react'
+import { createContext, useContext, useEffect, useReducer } from 'react'
 import { seedBooks } from '../data/books'
 import { seedReferralPartners } from '../data/referralPartners'
 
-const initialState = {
+const STORAGE_KEY = 'vtee-session'
+
+const seedState = {
   customerEmail: null,
   admin: null,
   books: seedBooks,
   referralPartners: seedReferralPartners,
   orders: [],
   commissionRate: { digital: 25, hardcopy: 25 },
+}
+
+// ponytail: single-user mock demo — persist the whole reducer state as-is,
+// no merge with fresh seed data needed.
+function loadInitialState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return seedState
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : seedState
+  } catch {
+    return seedState
+  }
 }
 
 let nextOrderId = 1
@@ -101,7 +116,16 @@ function reducer(state, action) {
 const SessionCtx = createContext(null)
 
 export function SessionProvider({ children }) {
-  const [state, dispatch] = useReducer(reducer, initialState)
+  const [state, dispatch] = useReducer(reducer, undefined, loadInitialState)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+    } catch {
+      // ponytail: private browsing / quota errors are non-fatal, just skip persisting
+    }
+  }, [state])
+
   return <SessionCtx.Provider value={{ state, dispatch }}>{children}</SessionCtx.Provider>
 }
 
