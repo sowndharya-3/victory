@@ -16,11 +16,16 @@ import AdminCustomersPage from './pages/admin/AdminCustomersPage'
 import AdminReferralsPage from './pages/admin/AdminReferralsPage'
 import AdminCommissionsPage from './pages/admin/AdminCommissionsPage'
 
-function App() {
+function ScrollReveal() {
   useScrollReveal()
+  return null
+}
+
+function App() {
   return (
     <SessionProvider>
       <BrowserRouter>
+        <ScrollReveal />
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/books" element={<BooksPage />} />
