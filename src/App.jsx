@@ -10,6 +10,8 @@ import AccountPage from './pages/AccountPage'
 import AdminLayout from './pages/admin/AdminLayout'
 import AdminDashboardPage from './pages/admin/AdminDashboardPage'
 import AdminBooksPage from './pages/admin/AdminBooksPage'
+import AdminOrdersPage from './pages/admin/AdminOrdersPage'
+import AdminCustomersPage from './pages/admin/AdminCustomersPage'
 
 function App() {
   return (
@@ -26,6 +28,8 @@ function App() {
           <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<AdminDashboardPage />} />
             <Route path="books" element={<AdminBooksPage />} />
+            <Route path="orders" element={<AdminOrdersPage />} />
+            <Route path="customers" element={<AdminCustomersPage />} />
           </Route>
         </Routes>
       </BrowserRouter>
