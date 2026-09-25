@@ -28,6 +28,16 @@ test('completing mock payment shows confirmation', () => {
   expect(screen.getByText(/payment successful/i)).toBeInTheDocument()
 })
 
+// The email input is only required-checked by the browser when it's inside a
+// <form> — guards against it silently being a no-op outside one.
+test('submitting with an empty email does not create an order', () => {
+  renderAt('/checkout/b1')
+  fireEvent.click(screen.getByLabelText(/digital/i))
+  fireEvent.click(screen.getByRole('button', { name: /pay with razorpay/i }))
+  expect(screen.queryByText(/payment successful/i)).not.toBeInTheDocument()
+  expect(screen.getByLabelText(/email/i)).toBeInvalid()
+})
+
 // Guards against the order being left in 'pending' state (see MARK_ORDER_PAID
 // dispatch in CheckoutPage) — BookDetailPage's "Read Book" unlock depends on paid orders.
 test('order is actually marked paid, unlocking the book on BookDetailPage', () => {

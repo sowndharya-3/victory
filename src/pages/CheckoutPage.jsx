@@ -34,7 +34,8 @@ function CheckoutPage() {
 
   const amount = purchaseType === 'digital' ? book.onlinePrice : book.hardCopyPrice
 
-  const handlePay = () => {
+  const handlePay = (e) => {
+    e.preventDefault()
     if (!email) return
     dispatch({ type: 'LOGIN_CUSTOMER', payload: { email } })
     dispatch({
@@ -65,31 +66,33 @@ function CheckoutPage() {
       <section className="container" style={{ padding: '2rem 0' }}>
         <h2>Checkout: {book.title}</h2>
 
-        <label htmlFor="email">Email</label>
-        <input id="email" type="email" className="form-control" value={email} onChange={e => setEmail(e.target.value)} required />
+        <form onSubmit={handlePay}>
+          <label htmlFor="email">Email</label>
+          <input id="email" type="email" className="form-control" value={email} onChange={e => setEmail(e.target.value)} required />
 
-        <fieldset>
-          <legend>Purchase type</legend>
-          <label>
-            <input type="radio" name="purchaseType" value="digital" checked={purchaseType === 'digital'} onChange={() => setPurchaseType('digital')} />
-            Digital (₹{book.onlinePrice})
-          </label>
-          <label>
-            <input type="radio" name="purchaseType" value="hardcopy" checked={purchaseType === 'hardcopy'} onChange={() => setPurchaseType('hardcopy')} />
-            Hard Copy (₹{book.hardCopyPrice})
-          </label>
-        </fieldset>
+          <fieldset>
+            <legend>Purchase type</legend>
+            <label>
+              <input type="radio" name="purchaseType" value="digital" checked={purchaseType === 'digital'} onChange={() => setPurchaseType('digital')} />
+              Digital (₹{book.onlinePrice})
+            </label>
+            <label>
+              <input type="radio" name="purchaseType" value="hardcopy" checked={purchaseType === 'hardcopy'} onChange={() => setPurchaseType('hardcopy')} />
+              Hard Copy (₹{book.hardCopyPrice})
+            </label>
+          </fieldset>
 
-        <label htmlFor="referralPartner">Referral Partner (optional)</label>
-        <select id="referralPartner" className="form-control" value={referralPartnerId} onChange={e => setReferralPartnerId(e.target.value)}>
-          <option value="">None</option>
-          {activePartners.map(p => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
+          <label htmlFor="referralPartner">Referral Partner (optional)</label>
+          <select id="referralPartner" className="form-control" value={referralPartnerId} onChange={e => setReferralPartnerId(e.target.value)}>
+            <option value="">None</option>
+            {activePartners.map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
 
-        <p>Total: ₹{amount}</p>
-        <button className="btn btn-primary" onClick={handlePay}>Pay with Razorpay</button>
+          <p>Total: ₹{amount}</p>
+          <button type="submit" className="btn btn-primary">Pay with Razorpay</button>
+        </form>
       </section>
       <Footer />
     </>
