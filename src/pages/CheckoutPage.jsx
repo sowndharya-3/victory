@@ -7,7 +7,7 @@ import Footer from '../components/home/Footer'
 function CheckoutPage() {
   const { bookId } = useParams()
   const { state, dispatch } = useSession()
-  const book = state.books.find(b => b.id === bookId)
+  const book = state.books.find(b => b.id === bookId && b.published)
   const activePartners = state.referralPartners.filter(p => p.approved && p.active)
 
   const [email, setEmail] = useState('')

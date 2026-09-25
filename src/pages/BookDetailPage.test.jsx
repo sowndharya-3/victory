@@ -20,3 +20,9 @@ test('shows Purchase button and no Read button when not purchased', () => {
   expect(screen.getByRole('link', { name: /purchase/i })).toBeInTheDocument()
   expect(screen.queryByRole('link', { name: /read book/i })).not.toBeInTheDocument()
 })
+
+test('treats an unpublished book as not found', () => {
+  renderAt('/books/b3') // b3 is seeded as published: false
+  expect(screen.getByText(/book not found/i)).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: /purchase/i })).not.toBeInTheDocument()
+})

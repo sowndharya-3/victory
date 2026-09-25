@@ -14,6 +14,12 @@ function renderAt(path) {
   )
 }
 
+test('treats an unpublished book as not found, blocking checkout', () => {
+  renderAt('/checkout/b3') // b3 is seeded as published: false
+  expect(screen.getByText(/book not found/i)).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /pay with razorpay/i })).not.toBeInTheDocument()
+})
+
 test('only lists approved+active referral partners', () => {
   renderAt('/checkout/b1')
   expect(screen.getByRole('option', { name: /kavitha r/i })).toBeInTheDocument()

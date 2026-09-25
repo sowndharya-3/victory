@@ -6,7 +6,7 @@ import Footer from '../components/home/Footer'
 function BookDetailPage() {
   const { id } = useParams()
   const { state } = useSession()
-  const book = state.books.find(b => b.id === id)
+  const book = state.books.find(b => b.id === id && b.published)
 
   if (!book) return <><Header /><div className="container">Book not found.</div><Footer /></>
 
