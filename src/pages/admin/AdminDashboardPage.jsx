@@ -7,7 +7,7 @@ function AdminDashboardPage() {
   const revenue = state.orders.filter(o => o.paymentStatus === 'paid').reduce((sum, o) => sum + o.amount, 0)
   const commission = state.orders
     .filter(o => o.paymentStatus === 'paid' && o.referralPartnerId)
-    .reduce((sum, o) => sum + (o.purchaseType === 'digital' ? state.commissionRate.digital : state.commissionRate.hardcopy), 0)
+    .reduce((sum, o) => sum + o.commission, 0)
 
   return (
     <div>

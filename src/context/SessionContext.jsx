@@ -91,11 +91,17 @@ function reducer(state, action) {
       }
 
     case 'CREATE_ORDER': {
+      // Snapshot commission at the CURRENT rate, at creation time — a later rate
+      // change must not retroactively change what a past order's commission was.
+      const commission = action.payload.referralPartnerId
+        ? (action.payload.purchaseType === 'digital' ? state.commissionRate.digital : state.commissionRate.hardcopy)
+        : 0
       const order = {
         ...action.payload,
         id: `o${nextOrderId++}`,
         paymentStatus: 'pending',
         date: new Date().toISOString(),
+        commission,
       }
       return { ...state, orders: [...state.orders, order] }
     }

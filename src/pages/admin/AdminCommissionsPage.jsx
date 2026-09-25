@@ -10,8 +10,7 @@ function AdminCommissionsPage() {
     .filter(o => o.paymentStatus === 'paid' && o.referralPartnerId)
     .map(o => {
       const partner = state.referralPartners.find(p => p.id === o.referralPartnerId)
-      const rate = o.purchaseType === 'digital' ? state.commissionRate.digital : state.commissionRate.hardcopy
-      return { orderId: o.id, partnerName: partner?.name, rate }
+      return { orderId: o.id, partnerName: partner?.name, rate: o.commission }
     })
 
   const total = commissionEntries.reduce((s, e) => s + e.rate, 0)

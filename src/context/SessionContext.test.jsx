@@ -163,6 +163,56 @@ test('TOGGLE_PUBLISH flips only the targeted book published flag', () => {
   expect(b2.published).toBe(true) // untouched, seed was true
 })
 
+test('CREATE_ORDER snapshots commission from the current rate for a digital order with a partner', () => {
+  const { result } = renderHook(() => useSession(), { wrapper })
+  act(() => {
+    result.current.dispatch({
+      type: 'CREATE_ORDER',
+      payload: { bookId: 'b1', customerEmail: 'a@b.com', purchaseType: 'digital', amount: 199, referralPartnerId: 'r1' },
+    })
+  })
+  expect(result.current.state.orders.at(-1).commission).toBe(25) // seed digital rate
+})
+
+test('CREATE_ORDER snapshots commission from the current rate for a hardcopy order with a partner', () => {
+  const { result } = renderHook(() => useSession(), { wrapper })
+  act(() => {
+    result.current.dispatch({ type: 'SET_COMMISSION_RATE', payload: { hardcopy: 40 } })
+  })
+  act(() => {
+    result.current.dispatch({
+      type: 'CREATE_ORDER',
+      payload: { bookId: 'b1', customerEmail: 'a@b.com', purchaseType: 'hardcopy', amount: 349, referralPartnerId: 'r1' },
+    })
+  })
+  expect(result.current.state.orders.at(-1).commission).toBe(40)
+})
+
+test('CREATE_ORDER commission is 0 when there is no referral partner', () => {
+  const { result } = renderHook(() => useSession(), { wrapper })
+  act(() => {
+    result.current.dispatch({
+      type: 'CREATE_ORDER',
+      payload: { bookId: 'b1', customerEmail: 'a@b.com', purchaseType: 'digital', amount: 199, referralPartnerId: null },
+    })
+  })
+  expect(result.current.state.orders.at(-1).commission).toBe(0)
+})
+
+test('CREATE_ORDER commission is not affected by a LATER rate change', () => {
+  const { result } = renderHook(() => useSession(), { wrapper })
+  act(() => {
+    result.current.dispatch({
+      type: 'CREATE_ORDER',
+      payload: { bookId: 'b1', customerEmail: 'a@b.com', purchaseType: 'digital', amount: 199, referralPartnerId: 'r1' },
+    })
+  })
+  act(() => {
+    result.current.dispatch({ type: 'SET_COMMISSION_RATE', payload: { digital: 99 } })
+  })
+  expect(result.current.state.orders.at(-1).commission).toBe(25)
+})
+
 test('SET_COMMISSION_RATE merges into commissionRate without dropping other keys', () => {
   const { result } = renderHook(() => useSession(), { wrapper })
   act(() => {
