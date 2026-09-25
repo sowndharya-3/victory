@@ -33,7 +33,7 @@ function Footer() {
               <p>Providing world-class educational services with personalized approach and professional ethics.</p>
               <div className="social-links">
                 <a href="#" className="social-icon"><i className="fab fa-facebook-f"></i></a>
-                <a href="#" className="social-icon"><i className="fab fa-twitter"></i></a>
+                <a href="#" className="social-icon"><i className="fab fa-x-twitter"></i></a>
                 <a href="#" className="social-icon"><i className="fab fa-instagram"></i></a>
                 <a href="#" className="social-icon"><i className="fab fa-linkedin-in"></i></a>
                 <a href="#" className="social-icon"><i className="fab fa-whatsapp"></i></a>
