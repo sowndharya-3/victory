@@ -12,6 +12,7 @@ import AdminDashboardPage from './pages/admin/AdminDashboardPage'
 import AdminBooksPage from './pages/admin/AdminBooksPage'
 import AdminOrdersPage from './pages/admin/AdminOrdersPage'
 import AdminCustomersPage from './pages/admin/AdminCustomersPage'
+import AdminReferralsPage from './pages/admin/AdminReferralsPage'
 
 function App() {
   return (
@@ -30,6 +31,7 @@ function App() {
             <Route path="books" element={<AdminBooksPage />} />
             <Route path="orders" element={<AdminOrdersPage />} />
             <Route path="customers" element={<AdminCustomersPage />} />
+            <Route path="referrals" element={<AdminReferralsPage />} />
           </Route>
         </Routes>
       </BrowserRouter>
