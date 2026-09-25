@@ -1969,14 +1969,18 @@ git commit -m "feat: add admin book management (add/publish/delete)"
 
 ```jsx
 // src/pages/admin/AdminOrdersPage.test.jsx
+import { useEffect } from 'react'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { SessionProvider, useSession } from '../../context/SessionContext'
 import AdminOrdersPage from './AdminOrdersPage'
 
 function Seed({ children }) {
   const { dispatch } = useSession()
-  dispatch({ type: 'CREATE_ORDER', payload: { bookId: 'b1', customerEmail: 'x@y.com', purchaseType: 'digital', amount: 199, referralPartnerId: null } })
-  dispatch({ type: 'CREATE_ORDER', payload: { bookId: 'b1', customerEmail: 'x@y.com', purchaseType: 'hardcopy', amount: 349, referralPartnerId: null } })
+  useEffect(() => {
+    dispatch({ type: 'CREATE_ORDER', payload: { bookId: 'b1', customerEmail: 'x@y.com', purchaseType: 'digital', amount: 199, referralPartnerId: null } })
+    dispatch({ type: 'CREATE_ORDER', payload: { bookId: 'b1', customerEmail: 'x@y.com', purchaseType: 'hardcopy', amount: 349, referralPartnerId: null } })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   return children
 }
 
@@ -2228,13 +2232,17 @@ git commit -m "feat: add admin referral partner approval/activation page"
 
 ```jsx
 // src/pages/admin/AdminCommissionsPage.test.jsx
+import { useEffect } from 'react'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { SessionProvider, useSession } from '../../context/SessionContext'
 import AdminCommissionsPage from './AdminCommissionsPage'
 
 function Seed({ children }) {
   const { dispatch } = useSession()
-  dispatch({ type: 'CREATE_ORDER', payload: { bookId: 'b1', customerEmail: 'x@y.com', purchaseType: 'digital', amount: 199, referralPartnerId: 'r1' } })
+  useEffect(() => {
+    dispatch({ type: 'CREATE_ORDER', payload: { bookId: 'b1', customerEmail: 'x@y.com', purchaseType: 'digital', amount: 199, referralPartnerId: 'r1' } })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   return children
 }
 
