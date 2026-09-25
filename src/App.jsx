@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { SessionProvider } from './context/SessionContext'
+import { useScrollReveal } from './hooks/useScrollReveal'
 import HomePage from './pages/HomePage'
 import BooksPage from './pages/BooksPage'
 import BookDetailPage from './pages/BookDetailPage'
@@ -16,6 +17,7 @@ import AdminReferralsPage from './pages/admin/AdminReferralsPage'
 import AdminCommissionsPage from './pages/admin/AdminCommissionsPage'
 
 function App() {
+  useScrollReveal()
   return (
     <SessionProvider>
       <BrowserRouter>
