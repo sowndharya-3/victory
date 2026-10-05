@@ -1691,3 +1691,97 @@
             user-select: none;
             -webkit-user-drag: none;
         }
+
+        /* Book listing (BooksPage) */
+        .books-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 30px;
+        }
+
+        @media (min-width: 640px) {
+            .books-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (min-width: 992px) {
+            .books-grid {
+                grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            }
+        }
+
+        .book-card {
+            background-color: var(--bg-primary);
+            border-radius: var(--border-radius);
+            overflow: hidden;
+            box-shadow: var(--shadow);
+            border: 2px solid var(--primary);
+            transition: transform 0.3s, box-shadow 0.3s;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .book-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 15px 30px rgba(155, 27, 48, 0.3);
+            background-color: white;
+        }
+
+        .book-card-cover {
+            width: 100%;
+            aspect-ratio: 3 / 4;
+            object-fit: cover;
+            display: block;
+            border-bottom: 2px solid var(--primary);
+        }
+
+        .book-card-body {
+            padding: 20px;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .book-card-title {
+            font-size: 1.2rem;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+            text-align: left;
+        }
+
+        .book-card-type {
+            display: inline-block;
+            align-self: flex-start;
+            background: var(--secondary);
+            color: white;
+            font-size: 0.75rem;
+            padding: 4px 12px;
+            border-radius: 20px;
+            margin-bottom: 14px;
+        }
+
+        .book-card-prices {
+            list-style: none;
+            margin-bottom: 18px;
+            flex-grow: 1;
+        }
+
+        .book-card-prices li {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            color: var(--text-primary);
+            font-size: 0.95rem;
+        }
+
+        .book-card-prices .price-value {
+            font-weight: 600;
+            color: var(--primary);
+        }
+
+        .book-card .btn {
+            width: 100%;
+            text-align: center;
+        }
