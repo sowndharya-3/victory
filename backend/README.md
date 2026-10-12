@@ -19,7 +19,12 @@ See `backend/.env.example` for the full list: `DB_HOST`, `DB_PORT`,
 
 ## Migrations
 
-(filled in by Task 2)
+Schema lives in `backend/migrations/*.sql`, applied in filename order.
+Apply the initial schema against the running stack:
+
+```bash
+docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/001_init.sql
+```
 
 ## API endpoints
 
