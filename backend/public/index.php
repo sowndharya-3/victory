@@ -15,12 +15,16 @@ spl_autoload_register(function (string $class) {
     }
 });
 
+use App\Middleware\Cors;
+use App\Middleware\ErrorHandler;
+use App\Router\Router;
+
 header('Content-Type: application/json');
 
-try {
-    \App\Database\Db::connection();
-    echo json_encode(['status' => 'db-connected']);
-} catch (\Throwable $e) {
-    http_response_code(500);
-    echo json_encode(['status' => 'db-connection-failed']);
-}
+Cors::handle();
+
+ErrorHandler::wrap(function () {
+    $router = new Router();
+    require __DIR__ . '/../src/routes.php';
+    $router->dispatch($_SERVER['REQUEST_METHOD'], parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH));
+});
