@@ -33,6 +33,16 @@ docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/
 | GET | /api/health | none | DB connectivity check |
 | POST | /api/auth/register | none | `{name, email, phone?, password}` → 201 `{token, user}` or 409 if email taken |
 | POST | /api/auth/login | none | `{email, password}` → 200 `{token, user}` or 401 |
+| POST | /api/admin/login | none | `{username, password}` → 200 `{token, admin}` or 401 |
+
+### Creating the first admin
+
+No admin-creation endpoint exists yet (that's a later sub-project). Seed
+one via the CLI:
+
+```bash
+docker compose exec -T php php scripts/seed_admin.php <username> <password>
+```
 
 ## Test results
 
