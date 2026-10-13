@@ -28,7 +28,11 @@ docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/
 
 ## API endpoints
 
-(filled in as each endpoint is built)
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| GET | /api/health | none | DB connectivity check |
+| POST | /api/auth/register | none | `{name, email, phone?, password}` → 201 `{token, user}` or 409 if email taken |
+| POST | /api/auth/login | none | `{email, password}` → 200 `{token, user}` or 401 |
 
 ## Test results
 
