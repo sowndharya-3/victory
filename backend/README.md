@@ -35,6 +35,8 @@ docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/
 | POST | /api/auth/login | none | `{email, password}` → 200 `{token, user}` or 401 |
 | POST | /api/admin/login | none | `{username, password}` → 200 `{token, admin}` or 401 |
 
+| GET | /api/me | Bearer JWT, any role | returns the caller's own profile, shape depends on role |
+
 ### Creating the first admin
 
 No admin-creation endpoint exists yet (that's a later sub-project). Seed
