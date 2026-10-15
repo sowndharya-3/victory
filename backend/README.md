@@ -48,4 +48,6 @@ docker compose exec -T php php scripts/seed_admin.php <username> <password>
 
 ## Test results
 
-See `backend/TEST_RESULTS.md` (written by Task 8).
+See `backend/TEST_RESULTS.md` for the actual captured output of the last
+full test run (`backend/tests/jwt_test.php` + `backend/tests/http_test.sh`).
+Re-run both against a live `docker compose up` stack any time to re-verify.
