@@ -1,19 +1,48 @@
 import { useEffect } from 'react'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { vi } from 'vitest'
 import { SessionProvider, useSession } from '../context/SessionContext'
 import AccountPage from './AccountPage'
+import * as authApi from '../api/auth'
 
-test('prompts for email when not logged in, then lists purchases', () => {
+test('logging in with real backend credentials sets customerEmail and shows the order list', async () => {
+  vi.spyOn(authApi, 'loginCustomer').mockResolvedValue({
+    token: 'fake-token',
+    user: { id: 1, name: 'Jane', email: 'jane@example.com' },
+  })
+
   render(
     <SessionProvider>
       <MemoryRouter><AccountPage /></MemoryRouter>
     </SessionProvider>
   )
-  expect(screen.getByLabelText(/email/i)).toBeInTheDocument()
-  fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'buyer@x.com' } })
-  fireEvent.click(screen.getByRole('button', { name: /view my books/i }))
-  expect(screen.getByText(/no purchased books yet/i)).toBeInTheDocument()
+
+  fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'jane@example.com' } })
+  fireEvent.change(screen.getByLabelText(/password/i), { target: { value: 'password123' } })
+  fireEvent.click(screen.getByRole('button', { name: /log in/i }))
+
+  await waitFor(() => {
+    expect(screen.getByText(/no purchased books yet/i)).toBeInTheDocument()
+  })
+})
+
+test('shows the backend error message on failed login', async () => {
+  vi.spyOn(authApi, 'loginCustomer').mockRejectedValue(new Error('Invalid email or password'))
+
+  render(
+    <SessionProvider>
+      <MemoryRouter><AccountPage /></MemoryRouter>
+    </SessionProvider>
+  )
+
+  fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'jane@example.com' } })
+  fireEvent.change(screen.getByLabelText(/password/i), { target: { value: 'wrong' } })
+  fireEvent.click(screen.getByRole('button', { name: /log in/i }))
+
+  await waitFor(() => {
+    expect(screen.getByText(/invalid email or password/i)).toBeInTheDocument()
+  })
 })
 
 // Test-only seeding wrapper (same pattern as ReaderPage.test.jsx): drives real
