@@ -8,6 +8,11 @@ full design.
 
 1. `cp backend/.env.example backend/.env` (already done if you're reading
    this from a fresh clone that included it — otherwise copy it yourself)
+1b. **Generate a real `JWT_SECRET`** — do not leave the placeholder from
+   `.env.example`. Run `php -r 'echo bin2hex(random_bytes(32));'` (or use
+   the `php` service: `docker compose exec -T php php -r '...'` once it's
+   up) and paste the output into `backend/.env`. The server refuses to
+   start with the placeholder or any secret under 32 bytes.
 2. `docker compose up -d --build`
 3. Apply the schema: see "Migrations" below.
 4. API is reachable at `http://localhost:8080`.

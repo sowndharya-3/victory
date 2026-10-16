@@ -81,6 +81,18 @@ BAD_LOGIN=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/auth/l
   -d "{\"email\":\"$EMAIL\",\"password\":\"wrongpassword\"}")
 check "wrong password returns 401" "$([ "$BAD_LOGIN" = "401" ] && echo true || echo false)"
 
+BAD_ADMIN_LOGIN=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/admin/login" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"wrongpassword"}')
+check "admin wrong password returns 401" "$([ "$BAD_ADMIN_LOGIN" = "401" ] && echo true || echo false)"
+
+echo "=== 8b. Validation ==="
+MISSING_PASSWORD=$(curl -s -o /tmp/validation.json -w "%{http_code}" -X POST "$BASE_URL/api/auth/register" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"No Password","email":"nopassword@example.com"}')
+check "register with missing password returns 400" "$([ "$MISSING_PASSWORD" = "400" ] && echo true || echo false)"
+check "400 response reports validation_error code" "$(grep -q '"code":"validation_error"' /tmp/validation.json && echo true || echo false)"
+
 echo "=== 9. CORS preflight ==="
 CORS=$(curl -s -D - -o /dev/null -X OPTIONS "$BASE_URL/api/auth/login" \
   -H "Origin: http://localhost:5173" \
@@ -89,7 +101,7 @@ check "preflight echoes exact configured origin" "$(echo "$CORS" | grep -qi "acc
 check "preflight does not use wildcard origin" "$(echo "$CORS" | grep -qi "access-control-allow-origin: \*" && echo false || echo true)"
 
 echo "=== 10. Database connectivity ==="
-check "health check queried a live database (already proven in step 1)" "$([ "$HEALTH" = "200" ] && echo true || echo false)"
+echo "(already proven in step 1 — HealthController runs a real SELECT 1 against MySQL, not a static 200; removed the redundant re-check here per final-review feedback that it was padding the pass count)"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

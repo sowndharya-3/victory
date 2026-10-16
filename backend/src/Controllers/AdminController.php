@@ -21,7 +21,8 @@ class AdminController
         $stmt->execute(['username' => $data['username']]);
         $admin = $stmt->fetch();
 
-        if (!$admin || !Password::verify($data['password'], $admin['password_hash'])) {
+        $passwordMatches = Password::verifyAgainstUserOrDummy($data['password'], $admin['password_hash'] ?? null);
+        if (!$admin || !$passwordMatches) {
             throw new ApiException('Invalid username or password', 401, 'invalid_credentials');
         }
 

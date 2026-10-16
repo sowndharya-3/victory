@@ -327,6 +327,12 @@ host port (`8080`) so the React dev server (`5173`) can call
 
 No book/order/referral/commission endpoints (tables exist, no controllers
 yet). No Razorpay. No digital file serving. No hardcopy address endpoint.
-No React frontend changes — the mock `SessionContext` keeps working
-exactly as today; wiring the frontend to this backend is a later
-sub-project once more endpoints exist to wire it to.
+No React frontend changes beyond wiring the Account page's login/register
+to this phase's auth endpoints (per the Non-goals section above) — the
+mock `SessionContext` purchase/order flow keeps working exactly as today;
+wiring the rest of the frontend (books, checkout, reader, admin) to a real
+backend is a later sub-project once more endpoints exist to wire it to.
+(This line previously said "No React frontend changes" with no carve-out,
+contradicting the Non-goals section above — corrected during the final
+review of the implementation that built this sub-project, after the user
+explicitly authorized the login/register/me wiring.)

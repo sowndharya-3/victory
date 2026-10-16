@@ -64,8 +64,8 @@ class Jwt
     private static function secret(): string
     {
         $secret = getenv('JWT_SECRET');
-        if (!$secret) {
-            throw new \RuntimeException('JWT_SECRET is not configured');
+        if (!$secret || strlen($secret) < 32 || $secret === 'changeme-generate-a-real-random-secret') {
+            throw new \RuntimeException('JWT_SECRET is not configured securely — see backend/README.md');
         }
         return $secret;
     }

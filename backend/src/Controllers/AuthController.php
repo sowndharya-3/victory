@@ -7,6 +7,7 @@ use App\Auth\Password;
 use App\Database\Db;
 use App\Http\ApiException;
 use App\Validation\Validator;
+use PDOException;
 
 class AuthController
 {
@@ -26,15 +27,27 @@ class AuthController
             throw new ApiException('Email already registered', 409, 'email_taken');
         }
 
-        $stmt = $db->prepare(
-            'INSERT INTO users (name, email, phone, password_hash) VALUES (:name, :email, :phone, :password_hash)'
-        );
-        $stmt->execute([
-            'name' => $data['name'],
-            'email' => $data['email'],
-            'phone' => $data['phone'] ?? null,
-            'password_hash' => Password::hash($data['password']),
-        ]);
+        // The SELECT above catches the common case with a clean error; this
+        // try/catch is the real guard against the race where two requests
+        // both pass that SELECT for the same email before either INSERTs
+        // (final-review finding — the plan's own Review Focus called out
+        // exactly this risk and the SELECT-only version left it half-open).
+        try {
+            $stmt = $db->prepare(
+                'INSERT INTO users (name, email, phone, password_hash) VALUES (:name, :email, :phone, :password_hash)'
+            );
+            $stmt->execute([
+                'name' => $data['name'],
+                'email' => $data['email'],
+                'phone' => $data['phone'] ?? null,
+                'password_hash' => Password::hash($data['password']),
+            ]);
+        } catch (PDOException $e) {
+            if ((string)$e->getCode() === '23000') {
+                throw new ApiException('Email already registered', 409, 'email_taken');
+            }
+            throw $e;
+        }
 
         $userId = (int)$db->lastInsertId();
         $token = Jwt::encode(['sub' => $userId, 'role' => 'customer'], 7 * 24 * 60 * 60);
@@ -57,7 +70,8 @@ class AuthController
         $stmt->execute(['email' => $data['email']]);
         $user = $stmt->fetch();
 
-        if (!$user || !Password::verify($data['password'], $user['password_hash'])) {
+        $passwordMatches = Password::verifyAgainstUserOrDummy($data['password'], $user['password_hash'] ?? null);
+        if (!$user || !$passwordMatches) {
             throw new ApiException('Invalid email or password', 401, 'invalid_credentials');
         }
 
