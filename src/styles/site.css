@@ -1695,19 +1695,14 @@
         /* Book listing (BooksPage) */
         .books-grid {
             display: grid;
-            grid-template-columns: 1fr;
-            gap: 30px;
+            grid-template-columns: repeat(2, minmax(0, 200px));
+            justify-content: center;
+            gap: 20px;
         }
 
         @media (min-width: 640px) {
             .books-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-        }
-
-        @media (min-width: 992px) {
-            .books-grid {
-                grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+                grid-template-columns: repeat(auto-fill, 200px);
             }
         }
 
@@ -1732,7 +1727,8 @@
         .book-card-cover {
             width: 100%;
             aspect-ratio: 3 / 4;
-            object-fit: cover;
+            object-fit: contain;
+            background-color: var(--bg-primary);
             display: block;
             border-bottom: 2px solid var(--primary);
         }
