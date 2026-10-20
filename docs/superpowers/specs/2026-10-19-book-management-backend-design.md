@@ -19,20 +19,15 @@ PDF is stored privately and simply isn't servable by anything yet, which is
 correct for this phase (nothing should be able to read it until a purchase
 exists).
 
-## Scope decision surfaced for review
+## Scope decision (resolved)
 
-The user's requirement #6 says: "Connect the existing React **book listing
-UI** to the book listing API without changing its current design." That's
-the public `BooksPage` (just redesigned in sub-project 3). It does **not**
-mention the admin book-management screens (`AdminBooksPage`,
-`AdminLoginPage`). This spec wires only the public listing/detail pages to
-the real backend; the admin UI stays on mock `SessionContext` state for
-now — admins can fully exercise the new backend via the APIs directly
-(verified with real HTTP requests in this sub-project's tests), but the
-`/admin` React screens aren't rewired to it yet. **If this is wrong, say so
-before implementation starts** — wiring `AdminBooksPage` to the real
-backend too is a bounded addition to this same plan, not a new sub-project,
-if you want it included now.
+Originally scoped to wire only the public `BooksPage` and leave
+`AdminBooksPage` on mock state. The user asked for `AdminBooksPage` to be
+included too — this spec now covers both. `AdminLoginPage` must also be
+wired to the real `POST /api/admin/login` (sub-project 2 built the
+endpoint, but no frontend page calls it yet — `AdminBooksPage` is useless
+against the real backend without a real admin session to authenticate
+with).
 
 ## Goals
 
@@ -158,16 +153,34 @@ hard delete).
 ## Frontend integration
 
 `src/api/books.js` (new, mirrors the existing `src/api/auth.js` pattern):
-`fetchBooks()` → `GET /api/books`, `fetchBook(id)` → `GET /api/books/:id`.
+public `fetchBooks()` → `GET /api/books`, `fetchBook(id)` → `GET /api/books/:id`;
+admin `fetchAdminBooks(token)`, `createBook(token, data)`,
+`updateBook(token, id, data)`, `publishBook(token, id)`,
+`unpublishBook(token, id)`, `archiveBook(token, id)`,
+`uploadBookFile(token, id, kind, file)` (kind: `cover`/`index`/`pdf`),
+`uploadPreviewPage(token, id, pageNumber, file)`.
 
-`BooksPage.jsx`: replace `useSession().state.books` with these real calls
-(loading/error states added, since this is now a real network call — the
-component's rendered markup/CSS is untouched, only its data source
-changes). `BookDetailPage.jsx` is **not** touched in this sub-project
-(it currently handles purchase/referral flow against mock orders, which
-depends on sub-project 5's work — rewiring just its book-fetch half now
-would leave it in a confusing mixed state. Deferred to sub-project 5,
-which touches that page anyway for the real purchase flow).
+**Public side:** `BooksPage.jsx` replaces `useSession().state.books` with
+`fetchBooks()` (loading/error states added — this is now a real network
+call — markup/CSS untouched, only the data source changes).
+`BookDetailPage.jsx` is **not** touched in this sub-project (it currently
+handles purchase/referral flow against mock orders, which depends on
+sub-project 5's work — rewiring just its book-fetch half now would leave
+it in a confusing mixed state. Deferred to sub-project 5, which touches
+that page anyway for the real purchase flow).
+
+**Admin side:** `AdminLoginPage.jsx` replaces its hardcoded
+`admin`/`admin123` check with a real `POST /api/admin/login` call,
+storing the returned JWT in `localStorage['vtee-admin-token']` (separate
+key from the customer `vtee-auth-token` set in sub-project 2 — different
+role, different lifetime, must not collide) and dispatching the existing
+mock `LOGIN_ADMIN` action so `AdminLayout`'s existing gate keeps working
+unchanged. `AdminBooksPage.jsx` replaces its `dispatch({type: 'ADD_BOOK', ...})`
+/`UPDATE_BOOK`/`DELETE_BOOK`/`TOGGLE_PUBLISH` calls with the real API
+functions above, reading the admin token from `localStorage`, with
+loading states during upload and inline validation/error messages on
+failure (per requirement #5) — markup structure stays close to the
+existing component, replacing its mock-data plumbing, not its design.
 
 ## Error handling
 
@@ -192,4 +205,20 @@ Capture real output, same as sub-project 2's `TEST_RESULTS.md` pattern.
 Frontend: `BooksPage.test.jsx` updated to mock `src/api/books.js` (same
 pattern as `AccountPage.test.jsx` mocking `src/api/auth.js`) instead of
 seeding `SessionContext` — must still prove published-only filtering,
-now via the API response shape rather than local state.
+now via the API response shape rather than local state. `AdminLoginPage.test.jsx`
+and `AdminBooksPage.test.jsx` similarly updated to mock the real API calls
+instead of dispatching mock actions directly, proving the UI calls the
+right endpoint with the right payload and renders loading/error states.
+
+**Explicit end-to-end flow (requirement #9), verified for real, not just
+unit-tested in isolation:** with the Docker stack and `npm run dev` both
+running, (1) log into `/admin` with real credentials, (2) create a book
+through `AdminBooksPage`'s real form, (3) query MySQL directly to confirm
+the row exists, (4) publish it through the admin UI, (5) load the public
+`/books` page in the same browser session and confirm the new book
+appears, (6) edit its title through the admin UI, reload the public page,
+confirm the new title shows, (7) unpublish it through the admin UI,
+reload the public page, confirm it's gone. This is the one check that
+can't be faked by either side's tests passing in isolation — it proves
+the two sides of the integration actually agree with each other through
+the real database.
