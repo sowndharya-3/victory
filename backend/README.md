@@ -45,6 +45,11 @@ docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/
 | GET | /api/books | none | Published, non-archived books. `[{id,title,description,category,coverUrl,onlinePrice,hardcopyPrice}]` |
 | GET | /api/books/:id | none | One book + `indexUrl`, `previewPages`. 404 if missing/unpublished/archived |
 
+| GET | /api/admin/books | admin | All books, any status, with `hasCover/hasIndex/hasPdf/previewPageCount` |
+| GET | /api/admin/books/:id | admin | One book, any status |
+| POST | /api/admin/books | admin | `{title, description?, category?, onlinePrice, hardcopyPrice}` → 201 |
+| PUT | /api/admin/books/:id | admin | Partial update of any metadata field |
+
 ### Creating the first admin
 
 No admin-creation endpoint exists yet (that's a later sub-project). Seed
