@@ -96,15 +96,18 @@ class AdminBookController
     public function uploadCover(string $id): void
     {
         AuthMiddleware::requireRole(['admin']);
-        $this->findOrFail($id);
+        $book = $this->findOrFail($id);
+        $bookId = (int)$book['id'];
         $ext = FileValidator::validateImage($_FILES['file'] ?? []);
-        $dir = self::UPLOAD_PUBLIC_DIR . "/{$id}";
+        $dir = self::UPLOAD_PUBLIC_DIR . "/{$bookId}";
         if (!is_dir($dir)) {
             mkdir($dir, 0755, true);
         }
         $destination = "{$dir}/cover.{$ext}";
-        move_uploaded_file($_FILES['file']['tmp_name'], $destination);
-        $url = "/uploads/books/{$id}/cover.{$ext}";
+        if (!move_uploaded_file($_FILES['file']['tmp_name'], $destination)) {
+            throw new ApiException('Failed to save uploaded file', 500, 'upload_failed');
+        }
+        $url = "/uploads/books/{$bookId}/cover.{$ext}";
         Db::connection()->prepare('UPDATE books SET cover_url = :url WHERE id = :id')->execute(['url' => $url, 'id' => $id]);
         echo json_encode(['coverUrl' => $url]);
     }
