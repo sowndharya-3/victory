@@ -74,6 +74,30 @@ class AdminBookController
         echo json_encode(self::formatAdmin($this->findOrFail($id)));
     }
 
+    public function publish(string $id): void
+    {
+        $this->setStatus($id, ['published' => 1]);
+    }
+
+    public function unpublish(string $id): void
+    {
+        $this->setStatus($id, ['published' => 0]);
+    }
+
+    public function archive(string $id): void
+    {
+        $this->setStatus($id, ['archived' => 1, 'published' => 0]);
+    }
+
+    private function setStatus(string $id, array $fields): void
+    {
+        AuthMiddleware::requireRole(['admin']);
+        $this->findOrFail($id);
+        $set = implode(', ', array_map(fn($k) => "{$k} = :{$k}", array_keys($fields)));
+        Db::connection()->prepare("UPDATE books SET {$set} WHERE id = :id")->execute($fields + ['id' => $id]);
+        echo json_encode(self::formatAdmin($this->findOrFail($id)));
+    }
+
     protected function findOrFail(string $id): array
     {
         $stmt = Db::connection()->prepare('SELECT * FROM books WHERE id = :id');

@@ -20,3 +20,6 @@ $router->get('/api/admin/books', [$adminBooks, 'list']);
 $router->get('/api/admin/books/{id}', [$adminBooks, 'show']);
 $router->post('/api/admin/books', [$adminBooks, 'create']);
 $router->put('/api/admin/books/{id}', [$adminBooks, 'update']);
+$router->post('/api/admin/books/{id}/publish', [$adminBooks, 'publish']);
+$router->post('/api/admin/books/{id}/unpublish', [$adminBooks, 'unpublish']);
+$router->post('/api/admin/books/{id}/archive', [$adminBooks, 'archive']);
