@@ -42,6 +42,9 @@ docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/
 
 | GET | /api/me | Bearer JWT, any role | returns the caller's own profile, shape depends on role |
 
+| GET | /api/books | none | Published, non-archived books. `[{id,title,description,category,coverUrl,onlinePrice,hardcopyPrice}]` |
+| GET | /api/books/:id | none | One book + `indexUrl`, `previewPages`. 404 if missing/unpublished/archived |
+
 ### Creating the first admin
 
 No admin-creation endpoint exists yet (that's a later sub-project). Seed
