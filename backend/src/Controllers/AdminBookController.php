@@ -112,6 +112,25 @@ class AdminBookController
         echo json_encode(['coverUrl' => $url]);
     }
 
+    public function uploadIndex(string $id): void
+    {
+        AuthMiddleware::requireRole(['admin']);
+        $book = $this->findOrFail($id);
+        $bookId = (int)$book['id'];
+        $ext = FileValidator::validateImageOrPdf($_FILES['file'] ?? []);
+        $dir = self::UPLOAD_PUBLIC_DIR . "/{$bookId}";
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+        $destination = "{$dir}/index.{$ext}";
+        if (!move_uploaded_file($_FILES['file']['tmp_name'], $destination)) {
+            throw new ApiException('Failed to save uploaded file', 500, 'upload_failed');
+        }
+        $url = "/uploads/books/{$bookId}/index.{$ext}";
+        Db::connection()->prepare('UPDATE books SET index_file_path = :url WHERE id = :id')->execute(['url' => $url, 'id' => $id]);
+        echo json_encode(['indexUrl' => $url]);
+    }
+
     private function setStatus(string $id, array $fields): void
     {
         AuthMiddleware::requireRole(['admin']);

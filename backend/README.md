@@ -53,6 +53,7 @@ docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/
 | POST | /api/admin/books/:id/unpublish | admin | sets published=0 |
 | POST | /api/admin/books/:id/archive | admin | sets archived=1, published=0 |
 | POST | /api/admin/books/:id/cover | admin | multipart `file` (image, max 5MB) → `{coverUrl}` |
+| POST | /api/admin/books/:id/index | admin | multipart `file` (image or PDF, max 5MB/50MB) → `{indexUrl}` |
 
 ### Creating the first admin
 
