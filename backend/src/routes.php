@@ -23,3 +23,4 @@ $router->put('/api/admin/books/{id}', [$adminBooks, 'update']);
 $router->post('/api/admin/books/{id}/publish', [$adminBooks, 'publish']);
 $router->post('/api/admin/books/{id}/unpublish', [$adminBooks, 'unpublish']);
 $router->post('/api/admin/books/{id}/archive', [$adminBooks, 'archive']);
+$router->post('/api/admin/books/{id}/cover', [$adminBooks, 'uploadCover']);

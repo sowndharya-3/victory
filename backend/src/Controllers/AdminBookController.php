@@ -5,10 +5,14 @@ namespace App\Controllers;
 use App\Database\Db;
 use App\Http\ApiException;
 use App\Middleware\AuthMiddleware;
+use App\Upload\FileValidator;
 use App\Validation\Validator;
 
 class AdminBookController
 {
+    private const UPLOAD_PUBLIC_DIR = __DIR__ . '/../../public/uploads/books';
+    private const UPLOAD_PRIVATE_DIR = __DIR__ . '/../../storage/books';
+
     public function list(): void
     {
         AuthMiddleware::requireRole(['admin']);
@@ -87,6 +91,22 @@ class AdminBookController
     public function archive(string $id): void
     {
         $this->setStatus($id, ['archived' => 1, 'published' => 0]);
+    }
+
+    public function uploadCover(string $id): void
+    {
+        AuthMiddleware::requireRole(['admin']);
+        $this->findOrFail($id);
+        $ext = FileValidator::validateImage($_FILES['file'] ?? []);
+        $dir = self::UPLOAD_PUBLIC_DIR . "/{$id}";
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+        $destination = "{$dir}/cover.{$ext}";
+        move_uploaded_file($_FILES['file']['tmp_name'], $destination);
+        $url = "/uploads/books/{$id}/cover.{$ext}";
+        Db::connection()->prepare('UPDATE books SET cover_url = :url WHERE id = :id')->execute(['url' => $url, 'id' => $id]);
+        echo json_encode(['coverUrl' => $url]);
     }
 
     private function setStatus(string $id, array $fields): void
