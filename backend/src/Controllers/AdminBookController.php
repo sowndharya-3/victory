@@ -131,6 +131,60 @@ class AdminBookController
         echo json_encode(['indexUrl' => $url]);
     }
 
+    public function uploadPreviewPage(string $id, string $pageNumber): void
+    {
+        AuthMiddleware::requireRole(['admin']);
+        $book = $this->findOrFail($id);
+        $bookId = (int)$book['id'];
+        $page = $this->validatePageNumber($pageNumber);
+        $ext = FileValidator::validateImage($_FILES['file'] ?? []);
+        $dir = self::UPLOAD_PUBLIC_DIR . "/{$bookId}";
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+        $destination = "{$dir}/preview-{$page}.{$ext}";
+        if (!move_uploaded_file($_FILES['file']['tmp_name'], $destination)) {
+            throw new ApiException('Failed to save uploaded file', 500, 'upload_failed');
+        }
+        $url = "/uploads/books/{$bookId}/preview-{$page}.{$ext}";
+
+        Db::connection()->prepare(
+            'INSERT INTO book_preview_pages (book_id, page_number, file_path) VALUES (:book_id, :page_number, :url)
+             ON DUPLICATE KEY UPDATE file_path = :url2'
+        )->execute(['book_id' => $id, 'page_number' => $page, 'url' => $url, 'url2' => $url]);
+
+        echo json_encode(['pageNumber' => $page, 'url' => $url]);
+    }
+
+    public function deletePreviewPage(string $id, string $pageNumber): void
+    {
+        AuthMiddleware::requireRole(['admin']);
+        $book = $this->findOrFail($id);
+        $bookId = (int)$book['id'];
+        $page = $this->validatePageNumber($pageNumber);
+        $db = Db::connection();
+        $stmt = $db->prepare('SELECT file_path FROM book_preview_pages WHERE book_id = :book_id AND page_number = :page_number');
+        $stmt->execute(['book_id' => $id, 'page_number' => $page]);
+        $row = $stmt->fetch();
+        if ($row) {
+            $path = self::UPLOAD_PUBLIC_DIR . "/{$bookId}/" . basename($row['file_path']);
+            if (file_exists($path)) {
+                unlink($path);
+            }
+            $db->prepare('DELETE FROM book_preview_pages WHERE book_id = :book_id AND page_number = :page_number')
+                ->execute(['book_id' => $id, 'page_number' => $page]);
+        }
+        echo json_encode(['deleted' => true]);
+    }
+
+    private function validatePageNumber(string $pageNumber): int
+    {
+        if (!ctype_digit($pageNumber) || (int)$pageNumber < 1) {
+            throw new ApiException('Invalid page number', 400, 'invalid_page_number');
+        }
+        return (int)$pageNumber;
+    }
+
     private function setStatus(string $id, array $fields): void
     {
         AuthMiddleware::requireRole(['admin']);
