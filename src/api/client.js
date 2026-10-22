@@ -18,3 +18,19 @@ export async function apiRequest(path, { method = 'GET', body, token } = {}) {
 
   return data
 }
+
+export async function apiRequestFile(path, token, file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const headers = {}
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  const res = await fetch(`${API_BASE_URL}${path}`, { method: 'POST', headers, body: formData })
+  const data = await res.json().catch(() => ({}))
+
+  if (!res.ok) {
+    throw new Error(data?.error?.message || 'Upload failed')
+  }
+
+  return data
+}
