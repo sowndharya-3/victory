@@ -56,6 +56,7 @@ docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/
 | POST | /api/admin/books/:id/index | admin | multipart `file` (image or PDF, max 5MB/50MB) → `{indexUrl}` |
 | POST | /api/admin/books/:id/preview-pages/:pageNumber | admin | multipart `file` (image, max 5MB) → upserts that page, `{pageNumber, url}` |
 | DELETE | /api/admin/books/:id/preview-pages/:pageNumber | admin | removes that page's file and row, `{deleted: true}` |
+| POST | /api/admin/books/:id/pdf | admin | multipart `file` (PDF, max 50MB) → stores privately under `backend/storage/`, never publicly servable |
 
 ### Creating the first admin
 

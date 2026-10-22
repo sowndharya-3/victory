@@ -156,6 +156,25 @@ class AdminBookController
         echo json_encode(['pageNumber' => $page, 'url' => $url]);
     }
 
+    public function uploadPdf(string $id): void
+    {
+        AuthMiddleware::requireRole(['admin']);
+        $book = $this->findOrFail($id);
+        $bookId = (int)$book['id'];
+        FileValidator::validatePdf($_FILES['file'] ?? []);
+        $dir = self::UPLOAD_PRIVATE_DIR . "/{$bookId}";
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+        $destination = "{$dir}/book.pdf";
+        if (!move_uploaded_file($_FILES['file']['tmp_name'], $destination)) {
+            throw new ApiException('Failed to save uploaded file', 500, 'upload_failed');
+        }
+        Db::connection()->prepare('UPDATE books SET digital_file_path = :path WHERE id = :id')
+            ->execute(['path' => $destination, 'id' => $id]);
+        echo json_encode(['pdfUploaded' => true]);
+    }
+
     public function deletePreviewPage(string $id, string $pageNumber): void
     {
         AuthMiddleware::requireRole(['admin']);

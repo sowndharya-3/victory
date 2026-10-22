@@ -27,3 +27,4 @@ $router->post('/api/admin/books/{id}/cover', [$adminBooks, 'uploadCover']);
 $router->post('/api/admin/books/{id}/index', [$adminBooks, 'uploadIndex']);
 $router->post('/api/admin/books/{id}/preview-pages/{pageNumber}', [$adminBooks, 'uploadPreviewPage']);
 $router->delete('/api/admin/books/{id}/preview-pages/{pageNumber}', [$adminBooks, 'deletePreviewPage']);
+$router->post('/api/admin/books/{id}/pdf', [$adminBooks, 'uploadPdf']);
