@@ -45,3 +45,53 @@ PASS: health check queried a live database (already proven in step 1)
 
 Results: 21 passed, 0 failed
 ```
+
+## Sub-project 4: Book Management
+
+Run date: 2026-10-22T13:22:44Z
+
+```
+PASS: real JPEG sniffs as image/jpeg
+PASS: real PDF sniffs as application/pdf
+PASS: PDF content renamed to .jpg still sniffs as application/pdf, not trusted by extension
+
+All upload validator tests passed.
+
+=== Setup: admin token, test files ===
+PASS: admin token obtained
+PASS: customer token obtained
+=== 1. Create a book ===
+PASS: create returns 201
+PASS: create returns an id
+=== 2. New book is not public yet ===
+PASS: unpublished book absent from public list
+=== 3. Publish, then it's public ===
+PASS: published book appears in public list
+=== 4. Cover, index, preview-page, PDF uploads ===
+PASS: cover upload returns a coverUrl
+PASS: index upload returns an indexUrl
+PASS: second preview page upload succeeds
+PASS: PDF upload returns pdfUploaded true
+=== 5. Public detail shows assets, never the private PDF path ===
+PASS: public detail includes coverUrl
+PASS: public detail includes indexUrl
+PASS: public detail includes 2 previewPages
+PASS: public detail never mentions digital_file_path or storage path
+PASS: public list never mentions digital_file_path
+=== 6. Private PDF genuinely unreachable ===
+PASS: direct PDF URL guess returns 404 (storage/ not in docroot)
+=== 7. Edit propagates ===
+PASS: edited title appears in public list
+=== 8. Unpublish removes from public list ===
+PASS: unpublished book absent from public list
+=== 9. Archive hides even if republished ===
+PASS: archived book absent from public list even though published=1 was set first
+=== 10. Role separation on admin endpoints ===
+PASS: create with no token returns 401
+PASS: create with customer-role token returns 403
+PASS: cover upload with customer-role token returns 403
+=== 11. Invalid file rejected ===
+PASS: non-image file upload to cover endpoint returns 400
+
+Results: 23 passed, 0 failed
+```

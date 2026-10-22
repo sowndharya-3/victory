@@ -70,5 +70,9 @@ docker compose exec -T php php scripts/seed_admin.php <username> <password>
 ## Test results
 
 See `backend/TEST_RESULTS.md` for the actual captured output of the last
-full test run (`backend/tests/jwt_test.php` + `backend/tests/http_test.sh`).
-Re-run both against a live `docker compose up` stack any time to re-verify.
+full test run:
+
+- `backend/tests/jwt_test.php` + `backend/tests/http_test.sh` — auth/health foundation
+- `backend/tests/upload_validator_test.php` + `backend/tests/book_test.sh` — book management (create → publish → cover/index/preview-pages/PDF uploads → public response shape/privacy → edit/unpublish/archive → role separation → invalid-file rejection)
+
+Re-run any of them against a live `docker compose up` stack any time to re-verify.
