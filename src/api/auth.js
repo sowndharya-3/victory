@@ -11,3 +11,7 @@ export function loginCustomer({ email, password }) {
 export function fetchMe(token) {
   return apiRequest('/api/me', { token })
 }
+
+export function loginAdmin({ username, password }) {
+  return apiRequest('/api/admin/login', { method: 'POST', body: { username, password } })
+}
