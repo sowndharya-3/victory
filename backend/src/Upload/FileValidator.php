@@ -57,6 +57,12 @@ class FileValidator
 
     private static function assertUploadOk(array $file): void
     {
+        if (isset($file['error']) && $file['error'] !== UPLOAD_ERR_OK) {
+            if (in_array($file['error'], [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true)) {
+                throw new ApiException('File too large', 400, 'invalid_file');
+            }
+            throw new ApiException('No file uploaded', 400, 'invalid_file');
+        }
         if (!isset($file['tmp_name']) || !is_uploaded_file($file['tmp_name'])) {
             throw new ApiException('No file uploaded', 400, 'invalid_file');
         }

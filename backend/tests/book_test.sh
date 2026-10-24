@@ -109,6 +109,18 @@ echo "not an image" > /tmp/book_test_bad.txt
 BAD_FILE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/admin/books/$BOOK_ID/cover" -H "Authorization: Bearer $ADMIN_TOKEN" -F "file=@/tmp/book_test_bad.txt")
 check "non-image file upload to cover endpoint returns 400" "$([ "$BAD_FILE" = "400" ] && echo true || echo false)"
 
+echo "=== 12. Oversized file rejected (exceeds FileValidator's 5MB image cap, well within PHP's 50M ini limit) ==="
+# ponytail: a real ~6.5MB JPEG — same minimal-valid-JPEG bytes as the cover
+# fixture above, padded past FileValidator::IMAGE_MAX_BYTES but nowhere near
+# the raised php.ini ceiling, so this exercises FileValidator's own cap
+# rather than PHP's ini limit (which this fix wave raised to 50M precisely
+# so this scenario would be reachable).
+docker compose exec -T php php -r "file_put_contents('/tmp/book_test_oversized.jpg', chr(0xFF).chr(0xD8).chr(0xFF).chr(0xE0).chr(0x00).chr(0x10).chr(0x4A).chr(0x46).chr(0x49).chr(0x46).chr(0x00).chr(0x01).chr(0x01).chr(0x00).chr(0x00).chr(0x01).chr(0x00).chr(0x01).chr(0x00).chr(0x00) . str_repeat(chr(0x00), 6*1024*1024) . chr(0xFF).chr(0xD9));" >/dev/null 2>&1
+docker compose cp php:/tmp/book_test_oversized.jpg /tmp/book_test_oversized.jpg >/dev/null 2>&1
+OVERSIZED=$(curl -s -o /tmp/book_test_oversized.json -w "%{http_code}" -X POST "$BASE_URL/api/admin/books/$BOOK_ID/cover" -H "Authorization: Bearer $ADMIN_TOKEN" -F "file=@/tmp/book_test_oversized.jpg")
+check "oversized (~6.5MB) image upload to cover endpoint returns 400" "$([ "$OVERSIZED" = "400" ] && echo true || echo false)"
+check "oversized image upload returns invalid_file code" "$(grep -q '"code":"invalid_file"' /tmp/book_test_oversized.json && echo true || echo false)"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 if [ "$FAIL" -gt 0 ]; then
