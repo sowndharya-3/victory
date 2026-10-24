@@ -16,6 +16,11 @@ full design.
 2. `docker compose up -d --build`
 3. Apply the schema: see "Migrations" below.
 4. API is reachable at `http://localhost:8080`.
+5. In a production deployment, `backend/public/uploads/` and `backend/storage/`
+   must exist and be writable by the PHP process's user before first use —
+   they're gitignored (correctly, since they hold user-uploaded content) so a
+   fresh deploy won't have them yet, and this codebase can't create them for
+   itself if the process lacks permission to do so.
 
 ## Environment variables
 

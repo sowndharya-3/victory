@@ -100,8 +100,8 @@ class AdminBookController
         $bookId = (int)$book['id'];
         $ext = FileValidator::validateImage($_FILES['file'] ?? []);
         $dir = self::UPLOAD_PUBLIC_DIR . "/{$bookId}";
-        if (!is_dir($dir)) {
-            mkdir($dir, 0755, true);
+        if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
+            throw new ApiException('Failed to create upload directory', 500, 'upload_failed');
         }
         $destination = "{$dir}/cover.{$ext}";
         if (!move_uploaded_file($_FILES['file']['tmp_name'], $destination)) {
@@ -119,8 +119,8 @@ class AdminBookController
         $bookId = (int)$book['id'];
         $ext = FileValidator::validateImageOrPdf($_FILES['file'] ?? []);
         $dir = self::UPLOAD_PUBLIC_DIR . "/{$bookId}";
-        if (!is_dir($dir)) {
-            mkdir($dir, 0755, true);
+        if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
+            throw new ApiException('Failed to create upload directory', 500, 'upload_failed');
         }
         $destination = "{$dir}/index.{$ext}";
         if (!move_uploaded_file($_FILES['file']['tmp_name'], $destination)) {
@@ -139,8 +139,8 @@ class AdminBookController
         $page = $this->validatePageNumber($pageNumber);
         $ext = FileValidator::validateImage($_FILES['file'] ?? []);
         $dir = self::UPLOAD_PUBLIC_DIR . "/{$bookId}";
-        if (!is_dir($dir)) {
-            mkdir($dir, 0755, true);
+        if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
+            throw new ApiException('Failed to create upload directory', 500, 'upload_failed');
         }
         $destination = "{$dir}/preview-{$page}.{$ext}";
         if (!move_uploaded_file($_FILES['file']['tmp_name'], $destination)) {
@@ -163,8 +163,8 @@ class AdminBookController
         $bookId = (int)$book['id'];
         FileValidator::validatePdf($_FILES['file'] ?? []);
         $dir = self::UPLOAD_PRIVATE_DIR . "/{$bookId}";
-        if (!is_dir($dir)) {
-            mkdir($dir, 0755, true);
+        if (!is_dir($dir) && !mkdir($dir, 0755, true)) {
+            throw new ApiException('Failed to create upload directory', 500, 'upload_failed');
         }
         $destination = "{$dir}/book.pdf";
         if (!move_uploaded_file($_FILES['file']['tmp_name'], $destination)) {
@@ -198,7 +198,7 @@ class AdminBookController
 
     private function validatePageNumber(string $pageNumber): int
     {
-        if (!ctype_digit($pageNumber) || (int)$pageNumber < 1) {
+        if (!ctype_digit($pageNumber) || (int)$pageNumber < 1 || (int)$pageNumber > 20) {
             throw new ApiException('Invalid page number', 400, 'invalid_page_number');
         }
         return (int)$pageNumber;
