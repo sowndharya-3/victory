@@ -5,7 +5,7 @@ import AdminLoginPage from './AdminLoginPage'
 function AdminLayout() {
   const { state, dispatch } = useSession()
 
-  if (!state.admin) return <AdminLoginPage />
+  if (!state.admin || !localStorage.getItem('vtee-admin-token')) return <AdminLoginPage />
 
   return (
     <div className="admin-layout">
@@ -16,7 +16,14 @@ function AdminLayout() {
         <Link to="/admin/referrals">Referral Partners</Link>
         <Link to="/admin/orders">Orders</Link>
         <Link to="/admin/commissions">Commissions</Link>
-        <button onClick={() => dispatch({ type: 'LOGOUT_ADMIN' })}>Log Out</button>
+        <button
+          onClick={() => {
+            localStorage.removeItem('vtee-admin-token')
+            dispatch({ type: 'LOGOUT_ADMIN' })
+          }}
+        >
+          Log Out
+        </button>
       </nav>
       <main className="container">
         <Outlet />
