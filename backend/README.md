@@ -16,6 +16,11 @@ full design.
 2. `docker compose up -d --build`
 3. Apply the schema: see "Migrations" below.
 4. API is reachable at `http://localhost:8080`.
+5. In a production deployment, `backend/public/uploads/` and `backend/storage/`
+   must exist and be writable by the PHP process's user before first use —
+   they're gitignored (correctly, since they hold user-uploaded content) so a
+   fresh deploy won't have them yet, and this codebase can't create them for
+   itself if the process lacks permission to do so.
 
 ## Environment variables
 
@@ -42,6 +47,22 @@ docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/
 
 | GET | /api/me | Bearer JWT, any role | returns the caller's own profile, shape depends on role |
 
+| GET | /api/books | none | Published, non-archived books. `[{id,title,description,category,coverUrl,onlinePrice,hardcopyPrice}]` |
+| GET | /api/books/:id | none | One book + `indexUrl`, `previewPages`. 404 if missing/unpublished/archived |
+
+| GET | /api/admin/books | admin | All books, any status, with `hasCover/hasIndex/hasPdf/previewPageCount` |
+| GET | /api/admin/books/:id | admin | One book, any status |
+| POST | /api/admin/books | admin | `{title, description?, category?, onlinePrice, hardcopyPrice}` → 201 |
+| PUT | /api/admin/books/:id | admin | Partial update of any metadata field |
+| POST | /api/admin/books/:id/publish | admin | sets published=1 |
+| POST | /api/admin/books/:id/unpublish | admin | sets published=0 |
+| POST | /api/admin/books/:id/archive | admin | sets archived=1, published=0 |
+| POST | /api/admin/books/:id/cover | admin | multipart `file` (image, max 5MB) → `{coverUrl}` |
+| POST | /api/admin/books/:id/index | admin | multipart `file` (image or PDF, max 5MB/50MB) → `{indexUrl}` |
+| POST | /api/admin/books/:id/preview-pages/:pageNumber | admin | multipart `file` (image, max 5MB) → upserts that page, `{pageNumber, url}` |
+| DELETE | /api/admin/books/:id/preview-pages/:pageNumber | admin | removes that page's file and row, `{deleted: true}` |
+| POST | /api/admin/books/:id/pdf | admin | multipart `file` (PDF, max 50MB) → stores privately under `backend/storage/`, never publicly servable |
+
 ### Creating the first admin
 
 No admin-creation endpoint exists yet (that's a later sub-project). Seed
@@ -54,5 +75,9 @@ docker compose exec -T php php scripts/seed_admin.php <username> <password>
 ## Test results
 
 See `backend/TEST_RESULTS.md` for the actual captured output of the last
-full test run (`backend/tests/jwt_test.php` + `backend/tests/http_test.sh`).
-Re-run both against a live `docker compose up` stack any time to re-verify.
+full test run:
+
+- `backend/tests/jwt_test.php` + `backend/tests/http_test.sh` — auth/health foundation
+- `backend/tests/upload_validator_test.php` + `backend/tests/book_test.sh` — book management (create → publish → cover/index/preview-pages/PDF uploads → public response shape/privacy → edit/unpublish/archive → role separation → invalid-file rejection)
+
+Re-run any of them against a live `docker compose up` stack any time to re-verify.
