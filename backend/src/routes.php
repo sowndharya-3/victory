@@ -6,6 +6,8 @@ use App\Controllers\AdminController;
 use App\Controllers\MeController;
 use App\Controllers\BookController;
 use App\Controllers\AdminBookController;
+use App\Controllers\CheckoutController;
+use App\Controllers\ReferralController;
 
 $router->get('/api/health', [new HealthController(), 'check']);
 $router->post('/api/auth/register', [new AuthController(), 'register']);
@@ -28,3 +30,6 @@ $router->post('/api/admin/books/{id}/index', [$adminBooks, 'uploadIndex']);
 $router->post('/api/admin/books/{id}/preview-pages/{pageNumber}', [$adminBooks, 'uploadPreviewPage']);
 $router->delete('/api/admin/books/{id}/preview-pages/{pageNumber}', [$adminBooks, 'deletePreviewPage']);
 $router->post('/api/admin/books/{id}/pdf', [$adminBooks, 'uploadPdf']);
+
+$router->get('/api/checkout/quote', [new CheckoutController(), 'quote']);
+$router->get('/api/referral/validate/{code}', [new ReferralController(), 'validate']);
