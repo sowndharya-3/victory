@@ -188,6 +188,96 @@ done
 check "20 creates in an hour -> 201 each" "$([ "$(echo $CODES | cut -d' ' -f1-20 | tr ' ' '\n' | sort -u)" = "201" ] && echo true || echo false)"
 check "21st create in an hour -> 429" "$([ "$OCODE" = "429" ] && echo true || echo false)"
 
+echo "=== 4. Verify payment and customer order APIs ==="
+RZP_SECRET=$(grep '^RAZORPAY_KEY_SECRET=' "$(dirname "$0")/../.env" | cut -d= -f2- | tr -d '\r')
+sign() { printf '%s|%s' "$1" "$2" | openssl dgst -sha256 -hmac "$RZP_SECRET" -hex | awk '{print $NF}'; }
+verify() { # $1 token $2 order id $3 rzp order id $4 payment id $5 signature -> VCODE, V
+  VCODE=$(curl -s -o "$TMP/v.json" -w '%{http_code}' -X POST "$BASE_URL/api/orders/$2/verify" -H "Content-Type: application/json" ${1:+-H "Authorization: Bearer $1"} \
+    -d "{\"razorpay_order_id\":\"$3\",\"razorpay_payment_id\":\"$4\",\"razorpay_signature\":\"$5\"}")
+  V=$(cat "$TMP/v.json")
+}
+get_json() { # $1 token $2 path -> GCODE, G
+  GCODE=$(curl -s -o "$TMP/g.json" -w '%{http_code}' "$BASE_URL$2" ${1:+-H "Authorization: Bearer $1"}); G=$(cat "$TMP/g.json")
+}
+new_order() { # $1 token $2 json -> NID, NRZP
+  post_order "$1" "$2"
+  NID=$(echo "$O" | grep -o '"order":{"id":[0-9]*' | grep -o '[0-9]*$')
+  NRZP=$(echo "$O" | grep -o '"orderId":"[^"]*"' | cut -d'"' -f4)
+}
+jh() { echo "$1" | grep -Eq "$2"; }
+order_status() { sql "SELECT status FROM orders WHERE id=$1"; }
+count_of() { echo "$1" | grep -o "$2" | wc -l | tr -d ' '; }
+
+read -r TOKEN_C UID_C <<<"$(register "ordertest-c-$STAMP@example.com")"
+read -r TOKEN_D UID_D <<<"$(register "ordertest-d-$STAMP@example.com")"
+sql "DELETE FROM rate_limits WHERE bucket IN ('order-create:$UID_C','order-create:$UID_D');"
+DIG="{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\"}"
+new_order "$TOKEN_C" "$DIG"; O1=$NID; R1=$NRZP
+new_order "$TOKEN_C" "$DIG"; O2=$NID; R2=$NRZP
+new_order "$TOKEN_C" "$DIG"; O3=$NID; R3=$NRZP
+new_order "$TOKEN_C" "$DIG"; O4=$NID; R4=$NRZP
+new_order "$TOKEN_C" "$DIG"; O5=$NID; R5=$NRZP
+new_order "$TOKEN_C" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"hardcopy\",\"address\":$ADDR}"; OH=$NID; RH=$NRZP
+new_order "$TOKEN_D" "$DIG"; OD=$NID
+check "section 4 fixtures created (6 orders for C, 1 for D)" "$([ -n "$O1" ] && [ -n "$O5" ] && [ -n "$OH" ] && [ -n "$OD" ] && [ -n "$R1" ] && [ -n "$RH" ] && [ -n "$UID_C" ] && echo true || echo false)"
+
+# Rejections first (none of these may change an order)
+P1="pay_fake_${R1}_captured"; S1=$(sign "$R1" "$P1")
+verify "" "$O1" "$R1" "$P1" "$S1"
+check "verify without token -> 401" "$([ "$VCODE" = "401" ] && echo true || echo false)"
+verify "$TOKEN_D" "$O1" "$R1" "$P1" "$S1"
+check "user D verifying C's order -> 404, order still pending" "$([ "$VCODE" = "404" ] && [ "$(order_status $O1)" = "pending" ] && echo true || echo false)"
+verify "$TOKEN_C" "$O2" "$R2" "pay_fake_${R2}_captured" "deadbeef"
+check "bad signature -> 400 payment_verification_failed" "$([ "$VCODE" = "400" ] && json_has "$V" '"code":"payment_verification_failed"' || echo false)"
+check "bad signature: order pending, no access row, payment not captured" "$([ "$(order_status $O2)" = "pending" ] && [ "$(sql "SELECT COUNT(*) FROM book_access WHERE user_id=$UID_C AND book_id=$BOOK_ID")" = "0" ] && [ "$(sql "SELECT status FROM payments WHERE order_id=$O2")" = "created" ] && echo true || echo false)"
+verify "$TOKEN_C" "$O2" "$R3" "pay_fake_${R3}_captured" "$(sign "$R3" "pay_fake_${R3}_captured")"
+check "valid signature for a different razorpay_order_id -> 400, order still pending" "$([ "$VCODE" = "400" ] && jh "$V" '"code":"payment_verification_failed"' && [ "$(order_status $O2)" = "pending" ] && echo true || echo false)"
+verify "$TOKEN_C" "$O2" "$R2" "pay_fake_${R3}_captured" "$(sign "$R2" "pay_fake_${R3}_captured")"
+check "signed payment from another gateway order -> 400, order still pending" "$([ "$VCODE" = "400" ] && [ "$(order_status $O2)" = "pending" ] && echo true || echo false)"
+verify "$TOKEN_C" "$O2" "" "" ""
+check "missing verify fields -> 400" "$([ "$VCODE" = "400" ] && echo true || echo false)"
+verify "$TOKEN_C" "99999999" "$R2" "$P1" "$S1"
+check "verify unknown order -> 404" "$([ "$VCODE" = "404" ] && echo true || echo false)"
+
+# Captured digital: paid, but NO book_access (access arrives via code redemption)
+verify "$TOKEN_C" "$O1" "$R1" "$P1" "$S1"
+check "captured digital verify -> 200, status paid, paidAt set" "$([ "$VCODE" = "200" ] && json_has "$V" '^\{"order":\{"id":'"$O1"',.*"status":"paid".*"paidAt":"[0-9]' || echo false)"
+check "digital paid: payment captured with id stored, NO book_access row" "$([ "$(sql "SELECT CONCAT(status,'|',razorpay_payment_id) FROM payments WHERE order_id=$O1")" = "captured|$P1" ] && [ "$(sql "SELECT COUNT(*) FROM book_access WHERE user_id=$UID_C AND book_id=$BOOK_ID")" = "0" ] && echo true || echo false)"
+verify "$TOKEN_C" "$O1" "$R1" "$P1" "$S1"
+check "repeat verify -> 200 idempotent, still paid" "$([ "$VCODE" = "200" ] && json_has "$V" '"status":"paid"' || echo false)"
+verify "$TOKEN_C" "$O1" "$R1" "$P1" "bad"
+check "repeat verify with bad signature on paid order -> still 400" "$([ "$VCODE" = "400" ] && echo true || echo false)"
+
+# Failed and authorized
+P4="pay_fake_${R4}_failed"
+verify "$TOKEN_C" "$O4" "$R4" "$P4" "$(sign "$R4" "$P4")"
+check "failed payment -> 200, status failed" "$([ "$VCODE" = "200" ] && jh "$V" '"status":"failed"' && [ "$(order_status $O4)" = "failed" ] && echo true || echo false)"
+P5="pay_fake_${R5}_authorized"
+verify "$TOKEN_C" "$O5" "$R5" "$P5" "$(sign "$R5" "$P5")"
+check "authorized payment -> 202, order still pending" "$([ "$VCODE" = "202" ] && jh "$V" '"status":"pending"' && [ "$(order_status $O5)" = "pending" ] && echo true || echo false)"
+
+# Hard copy
+PH="pay_fake_${RH}_captured"
+verify "$TOKEN_C" "$OH" "$RH" "$PH" "$(sign "$RH" "$PH")"
+check "hardcopy verify -> 200, paid, fulfilmentStatus confirmed" "$([ "$VCODE" = "200" ] && jh "$V" '"status":"paid"' && jh "$V" '"fulfilmentStatus":"confirmed"' && echo true || echo false)"
+
+# Customer order APIs
+get_json "$TOKEN_C" "/api/me/orders"
+check "GET /api/me/orders -> 200 with C's 6 orders, none of D's" "$([ "$GCODE" = "200" ] && [ "$(count_of "$G" '"orderNumber"')" = "6" ] && ! echo "$G" | grep -q "\"id\":$OD," && echo true || echo false)"
+check "orders list newest first (hardcopy order leads)" "$(json_has "$G" '^\[\{"id":'"$OH"',')"
+get_json "$TOKEN_D" "/api/me/orders"
+check "D's list has exactly D's one order" "$([ "$(count_of "$G" '"orderNumber"')" = "1" ] && json_has "$G" "\"id\":$OD," || echo false)"
+get_json "" "/api/me/orders"
+check "orders list without token -> 401" "$([ "$GCODE" = "401" ] && echo true || echo false)"
+get_json "$TOKEN_C" "/api/me/orders/$OH"
+check "GET /api/me/orders/{hardcopy} includes address, fulfilmentStatus confirmed" "$([ "$GCODE" = "200" ] && json_has "$G" '"fulfilmentStatus":"confirmed".*"address":\{.*"fullName":"Asha Kumar".*"pincode":"625001"' || echo false)"
+get_json "$TOKEN_C" "/api/me/orders/$O1"
+check "GET /api/me/orders/{digital} -> 200 paid, no address" "$([ "$GCODE" = "200" ] && jh "$G" '"status":"paid"' && ! echo "$G" | grep -q '"address"' && echo true || echo false)"
+get_json "$TOKEN_D" "/api/me/orders/$O1"
+check "GET /api/me/orders/{C's} as D -> 404" "$([ "$GCODE" = "404" ] && echo true || echo false)"
+get_json "$TOKEN_C" "/api/me/orders/99999999"
+check "GET /api/me/orders/{missing} -> 404" "$([ "$GCODE" = "404" ] && echo true || echo false)"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -gt 0 ] && exit 1

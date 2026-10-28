@@ -163,13 +163,18 @@ try {
     check('markFailed unknown order', OrderFulfillment::markFailed('order_nope' . $tag, 'pay_z', 'r') === 'unknown_order');
 
     // concurrency: two processes, same order
+    // Deterministic: hold the row lock ourselves so both children are queued on it before it is released.
     $r = mkOrder('hardcopy', $partnerId);
+    $db->beginTransaction();
+    q('SELECT o.id FROM payments p JOIN orders o ON o.id = p.order_id WHERE p.razorpay_order_id = ? FOR UPDATE', [$r['rzp']]);
     $procs = [];
     for ($k = 0; $k < 2; $k++) {
         $pipes = [];
         $p = proc_open([PHP_BINARY, __DIR__ . '/helpers/mark_paid.php', $r['rzp'], 'pay_' . $tag . 'r', '49900'], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
         $procs[] = [$p, $pipes];
     }
+    usleep(500000);
+    $db->commit();
     $outs = [];
     foreach ($procs as [$p, $pipes]) {
         $outs[] = trim(stream_get_contents($pipes[1])) . trim(stream_get_contents($pipes[2]));

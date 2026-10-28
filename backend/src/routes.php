@@ -35,3 +35,6 @@ $router->post('/api/admin/books/{id}/pdf', [$adminBooks, 'uploadPdf']);
 $router->get('/api/checkout/quote', [new CheckoutController(), 'quote']);
 $router->get('/api/referral/validate/{code}', [new ReferralController(), 'validate']);
 $router->post('/api/orders', [new OrderController(), 'create']);
+$router->post('/api/orders/{id}/verify', [new OrderController(), 'verify']);
+$router->get('/api/me/orders', [new OrderController(), 'mine']);
+$router->get('/api/me/orders/{id}', [new OrderController(), 'showMine']);
