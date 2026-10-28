@@ -8,6 +8,7 @@ use App\Controllers\BookController;
 use App\Controllers\AdminBookController;
 use App\Controllers\CheckoutController;
 use App\Controllers\ReferralController;
+use App\Controllers\OrderController;
 
 $router->get('/api/health', [new HealthController(), 'check']);
 $router->post('/api/auth/register', [new AuthController(), 'register']);
@@ -33,3 +34,4 @@ $router->post('/api/admin/books/{id}/pdf', [$adminBooks, 'uploadPdf']);
 
 $router->get('/api/checkout/quote', [new CheckoutController(), 'quote']);
 $router->get('/api/referral/validate/{code}', [new ReferralController(), 'validate']);
+$router->post('/api/orders', [new OrderController(), 'create']);

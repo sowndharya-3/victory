@@ -28,8 +28,14 @@ cleanup() {
        DELETE FROM referral_partners WHERE referral_code IN ('VTP-TEST01','VTP-TEST02');
        DELETE FROM rate_limits WHERE bucket LIKE 'referral-validate:%';"
   if [ -n "$BOOK_ID" ]; then
-    sql "DELETE FROM book_preview_pages WHERE book_id=$BOOK_ID; DELETE FROM books WHERE id=$BOOK_ID;"
+    sql "DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE book_id=$BOOK_ID);
+         DELETE FROM hardcopy_addresses WHERE order_id IN (SELECT id FROM orders WHERE book_id=$BOOK_ID);
+         DELETE FROM book_access WHERE book_id=$BOOK_ID;
+         DELETE FROM orders WHERE book_id=$BOOK_ID;
+         DELETE FROM book_preview_pages WHERE book_id=$BOOK_ID; DELETE FROM books WHERE id=$BOOK_ID;"
   fi
+  sql "DELETE FROM rate_limits WHERE bucket LIKE 'order-create:%' AND SUBSTRING_INDEX(bucket,':',-1) IN (SELECT id FROM users WHERE email LIKE 'ordertest-%@example.com');
+       DELETE FROM users WHERE email LIKE 'ordertest-%@example.com';"
 }
 trap cleanup EXIT
 
@@ -95,6 +101,92 @@ check "30th call within a minute still 200" "$([ "$THIRTIETH" = "200" ] && echo 
 check "31st call within a minute -> 429" "$([ "$LAST" = "429" ] && echo true || echo false)"
 BODY=$(curl -s "$BASE_URL/api/referral/validate/VTP-TEST01")
 check "429 body has rate_limited code" "$(json_has "$BODY" '"code":"rate_limited"')"
+
+echo "=== 3. Create order ==="
+register() { # $1 email -> prints "token id"
+  local r; r=$(curl -s -X POST "$BASE_URL/api/auth/register" -H "Content-Type: application/json" -d "{\"name\":\"T\",\"email\":\"$1\",\"password\":\"password123\"}")
+  echo "$(echo "$r" | grep -o '"token":"[^"]*"' | cut -d'"' -f4) $(echo "$r" | grep -o '"user":{"id":[0-9]*' | grep -o '[0-9]*$')"
+}
+post_order() { # $1 token $2 json -> body in $TMP/o.json, code in $OCODE
+  OCODE=$(curl -s -o "$TMP/o.json" -w '%{http_code}' -X POST "$BASE_URL/api/orders" -H "Content-Type: application/json" ${1:+-H "Authorization: Bearer $1"} -d "$2")
+  O=$(cat "$TMP/o.json")
+}
+STAMP="$(date +%s)$$"
+EMAIL_A="ordertest-a-$STAMP@example.com"; EMAIL_B="ordertest-b-$STAMP@example.com"
+read -r TOKEN_A UID_A <<<"$(register "$EMAIL_A")"
+read -r TOKEN_B UID_B <<<"$(register "$EMAIL_B")"
+check "order test customers registered" "$([ -n "$TOKEN_A" ] && [ -n "$UID_A" ] && [ -n "$TOKEN_B" ] && [ -n "$UID_B" ] && echo true || echo false)"
+sql "DELETE FROM rate_limits WHERE bucket IN ('order-create:$UID_A','order-create:$UID_B');"
+
+post_order "" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\"}"
+check "no token -> 401" "$([ "$OCODE" = "401" ] && echo true || echo false)"
+post_order "$TOKEN_A" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\"}"
+check "unpublished book -> 404" "$([ "$OCODE" = "404" ] && echo true || echo false)"
+curl -s -X POST "$BASE_URL/api/admin/books/$BOOK_ID/publish" -H "Authorization: Bearer $ADMIN_TOKEN" >/dev/null
+
+post_order "$TOKEN_A" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"bogus\"}"
+check "bad purchaseType -> 400" "$([ "$OCODE" = "400" ] && echo true || echo false)"
+post_order "$TOKEN_A" "{\"bookId\":\"x\",\"purchaseType\":\"digital\"}"
+check "bad bookId -> 400" "$([ "$OCODE" = "400" ] && echo true || echo false)"
+
+post_order "$TOKEN_A" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\",\"amount\":1}"
+check "digital create -> 201" "$([ "$OCODE" = "201" ] && echo true || echo false)"
+check "order total 199, pending, razorpay amount 19900 (body amount ignored)" "$(json_has "$O" '"status":"pending".*"total":199(\.0)?[,}].*"razorpay":\{"keyId":"[^"]*","orderId":"order_fake_[0-9a-f]+","amount":19900,"currency":"INR"\}')"
+check "order number format VT-YYYYMMDD-XXXXXX" "$(json_has "$O" '"orderNumber":"VT-[0-9]{8}-[0-9A-HJKMNP-TV-Z]{6}"')"
+check "digital order fulfilment not_applicable" "$(json_has "$O" '"fulfilmentStatus":"not_applicable"')"
+ORDER_ID=$(echo "$O" | grep -o '"order":{"id":[0-9]*' | grep -o '[0-9]*$')
+check "orders row amount 199.00 pending; payments row created with razorpay id" "$([ "$(sql "SELECT CONCAT(o.amount,'|',o.status,'|',p.status,'|',LEFT(p.razorpay_order_id,11),'|',p.amount) FROM orders o JOIN payments p ON p.order_id=o.id WHERE o.id=$ORDER_ID")" = "199.00|pending|created|order_fake_|199.00" ] && echo true || echo false)"
+
+post_order "$TOKEN_A" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"hardcopy\"}"
+check "hardcopy without address -> 400 fields.address" "$([ "$OCODE" = "400" ] && json_has "$O" '"fields":\{"address' || echo false)"
+post_order "$TOKEN_A" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"hardcopy\",\"address\":{\"fullName\":\"A\",\"phone\":\"123\"}}"
+check "hardcopy with invalid address -> 400 fields.address.*" "$([ "$OCODE" = "400" ] && json_has "$O" '"address\.phone"' || echo false)"
+ADDR='{"fullName":"Asha Kumar","phone":"+91 98765-43210","addressLine":"12 Main Rd","city":"Madurai","district":"Madurai","state":"Tamil Nadu","pincode":"625001"}'
+post_order "$TOKEN_A" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"hardcopy\",\"address\":$ADDR}"
+check "hardcopy with valid address -> 201" "$([ "$OCODE" = "201" ] && echo true || echo false)"
+check "hardcopy response has camelCase address, total 349" "$(json_has "$O" '"total":349(\.0)?[,}].*"address":\{.*"fullName":"Asha Kumar".*"phone":"9876543210".*"pincode":"625001"')"
+HC_ID=$(echo "$O" | grep -o '"order":{"id":[0-9]*' | grep -o '[0-9]*$')
+check "hardcopy_addresses row exists, fulfilment not_applicable" "$([ "$(sql "SELECT CONCAT(a.pincode,'|',a.phone,'|',o.fulfilment_status) FROM hardcopy_addresses a JOIN orders o ON o.id=a.order_id WHERE a.order_id=$HC_ID")" = "625001|9876543210|not_applicable" ] && echo true || echo false)"
+
+# Referral: active partner, self-referral, unknown code
+sql "DELETE FROM referral_partners WHERE referral_code IN ('VTP-TEST01','VTP-TEST02');
+     INSERT INTO referral_partners (name, phone, whatsapp, gmail, referral_code, active) VALUES
+       ('Meena Test','9876543210','9876543210','meena-test@example.com','VTP-TEST01',1);"
+post_order "$TOKEN_A" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\",\"referralCode\":\"vtp-test01\"}"
+RID=$(echo "$O" | grep -o '"order":{"id":[0-9]*' | grep -o '[0-9]*$')
+check "active referral code stored in referral_partner_id + snapshot" "$([ "$OCODE" = "201" ] && [ "$(sql "SELECT (referral_partner_id=(SELECT id FROM referral_partners WHERE referral_code='VTP-TEST01')) AND referral_code_snapshot='VTP-TEST01' FROM orders WHERE id=$RID")" = "1" ] && echo true || echo false)"
+sql "UPDATE referral_partners SET gmail='$EMAIL_A' WHERE referral_code='VTP-TEST01';"
+post_order "$TOKEN_A" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\",\"referralCode\":\"VTP-TEST01\"}"
+RID=$(echo "$O" | grep -o '"order":{"id":[0-9]*' | grep -o '[0-9]*$')
+check "self-referral -> 201, referral_partner_id NULL" "$([ "$OCODE" = "201" ] && [ "$(sql "SELECT referral_partner_id IS NULL AND referral_code_snapshot IS NULL FROM orders WHERE id=$RID")" = "1" ] && echo true || echo false)"
+post_order "$TOKEN_A" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\",\"referralCode\":\"VTP-NOPE99\"}"
+RID=$(echo "$O" | grep -o '"order":{"id":[0-9]*' | grep -o '[0-9]*$')
+check "unknown referral code -> 201, referral_partner_id NULL" "$([ "$OCODE" = "201" ] && [ "$(sql "SELECT referral_partner_id IS NULL FROM orders WHERE id=$RID")" = "1" ] && echo true || echo false)"
+
+# Already owned (digital only)
+sql "INSERT INTO book_access (user_id, book_id) VALUES ($UID_A, $BOOK_ID);"
+post_order "$TOKEN_A" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\"}"
+check "digital with active book_access -> 409 already_owned" "$([ "$OCODE" = "409" ] && json_has "$O" '"code":"already_owned"' || echo false)"
+post_order "$TOKEN_A" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"hardcopy\",\"address\":$ADDR}"
+check "hardcopy with book_access still allowed -> 201" "$([ "$OCODE" = "201" ] && echo true || echo false)"
+sql "UPDATE book_access SET revoked_at=NOW() WHERE user_id=$UID_A AND book_id=$BOOK_ID;"
+post_order "$TOKEN_A" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\"}"
+check "digital with revoked book_access -> 201" "$([ "$OCODE" = "201" ] && echo true || echo false)"
+sql "DELETE FROM book_access WHERE user_id=$UID_A AND book_id=$BOOK_ID; UPDATE orders SET status='paid' WHERE id=$ORDER_ID;"
+post_order "$TOKEN_A" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\"}"
+check "digital with paid digital order (unredeemed) -> 409 already_owned" "$([ "$OCODE" = "409" ] && json_has "$O" '"code":"already_owned"' || echo false)"
+
+# Rate limit: 20/hour per user (fixed hour window; avoid straddling the boundary)
+MIN=$((10#$(date +%M)))
+[ "$MIN" -ge 58 ] && sleep $(( (60 - MIN) * 60 + 2 ))
+sql "DELETE FROM rate_limits WHERE bucket='order-create:$UID_B';"
+CODES=""
+for i in $(seq 1 21); do
+  post_order "$TOKEN_B" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\"}"
+  CODES="$CODES $OCODE"
+done
+check "20 creates in an hour -> 201 each" "$([ "$(echo $CODES | cut -d' ' -f1-20 | tr ' ' '\n' | sort -u)" = "201" ] && echo true || echo false)"
+check "21st create in an hour -> 429" "$([ "$OCODE" = "429" ] && echo true || echo false)"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
