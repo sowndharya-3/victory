@@ -33,8 +33,8 @@
 5. **Env**: add `CODE_SECRET` (≥32 bytes, placeholder-rejected, lazily validated like Razorpay). Hash pepper = `hash_hmac('sha256','hash',CODE_SECRET)`, encryption key = `hash_hmac('sha256','enc',CODE_SECRET)`.
 6. **Code policy (my call, change if wrong):** digital code = 16 chars Crockford base32 (80 bits) shown as `XXXX-XXXX-XXXX-XXXX`; stored as `HMAC-SHA256(pepper, normalised code)` plus last4. The plaintext is kept only as AES-256-GCM ciphertext in `code_enc` **until redeemed** (so the owner can re-display it while logged in), then `code_enc` is set NULL. Admins never see plaintext: only status, last4, timestamps; they can verify, revoke and reissue. Reissue revokes the old code, issues a new one, links `replaced_by_id`, writes `audit_logs`.
 7. **Deferred out of SP-5:** email outbox/SMTP (old Task 9), moved to a later sub-project after reader + admin. Mail-related steps and `skipped` outbox checks in other tasks are dropped; orders and codes are shown on pages instead.
-8. **Upcoming plans** (written after SP-5 merges): SP-6 secure reader (Poppler in PHP image, page-image endpoints, reader UI), SP-8 admin (orders/customers/dashboard/code management/fulfilment screens), then refunds, referrals admin, email.
-**Execution order:** Tasks 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 14b → 15 (Task 14b is listed next to Task 9 but needs Tasks 12–14).
+8. **Scope widened by the owner's second brief (2026-10-28):** this plan now also covers refunds with commission reversal (Task 16), the secure reader (Tasks 17–18), the real Admin Panel (Tasks 19–21) and the deployment handover (Task 15, run last). Email stays deferred. Live deployment is a separate owner-approved step.
+**Execution order:** 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 14b → 16 → 17 → 18 → 19 → 20 → 21 → 15 (Task 15 last; Task 14b/16 sit near other tasks in the file but follow this order).
 
 
 ## Review Focus
@@ -372,15 +372,148 @@ Frontend:
 
 ---
 
-### Task 15: End-to-end verification
+## Part 2 (added 2026-10-28): refunds, reader, real Admin Panel, handover
 
-**Files:** none new (results appended to `backend/TEST_RESULTS.md`).
+Scope from the owner's second brief. **Preserve SP-4 and the two real books (book ids 1 and 2 in the dev DB; never reset the volume).** Email stays deferred.
 
-- [ ] **Step 1: Full automated pass** — backend suite (Task 11 Step 1), `npm test`, `npm run build`. Expected: zero failures.
-- [ ] **Step 2: Browser E2E on the fake gateway** (Playwright/Chrome MCP against `npm run dev` + docker stack): register → book page → digital checkout shows breakdown → pay (fake handler path: temporarily call verify with a signed fake payment from the test harness) → result "Payment received"; hard-copy checkout with address → result shows shipping city; failed payment path shows retry; abandon-and-return shows pending order in My Orders.
-- [ ] **Step 3: Real Razorpay test mode (needs owner's test keys, U6)** — set `RAZORPAY_GATEWAY=live`, test key id/secret/webhook secret, expose the webhook with ngrok; pay with a Razorpay test card/UPI success and failure; confirm verify path, then a second run closing the tab before the handler fires proves the webhook alone fulfils the order; replay the webhook from the Razorpay dashboard and confirm no duplicates. Record outcomes.
-- [ ] **Step 4: Release gate checklist in `TEST_RESULTS.md`** — list the open blockers: U1 shipping and U2 GST settings confirmed and set, U5 SMTP configured, U7 production host/HTTPS, and "do not release before SP-6 (reader)".
-- [ ] **Step 5: Commit** — `docs(sp5): verification results and release gate`
+**Security and dependency review of this plan (done before implementation):**
+- *Dependencies:* `poppler-utils` in the PHP image (apt needs network at build; fallback if apt fails: render pages with a one-off script and document it as a blocker); Razorpay test keys (fake gateway until U6); `CODE_SECRET`; cron for `reconcile_orders.php`; nginx root stays `backend/public` so `storage/` is never served; PHP `curl` ext (verify in Task 3); PDF limit 50 MB already enforced.
+- *Risks accepted and flagged:* (1) admin **reissue** returns the new plaintext code once to the admin so they can pass it to the customer — audited, never listed in tables or logs; (2) `code_enc` is plaintext-recoverable with `CODE_SECRET` until redemption — rotate the secret only with a re-encrypt script (out of scope, noted in handover); (3) rate limits key on `REMOTE_ADDR` — behind a reverse proxy this is the proxy IP, so the deployment team must configure the real client IP (handover item); (4) JWT in localStorage (inherited); (5) screenshots/recording cannot be prevented — UI states it honestly; (6) the referral *selector* in the owner's brief is implemented as **code entry / `?ref=` link** to avoid publishing the partner list — change only if the owner insists (a public list of first names + code).
+- *Privacy:* admin screens show customer name, email, phone and shipping address — admin-only; the public `/api/track/{code}` returns none of these.
+
+### Task 16: Refund requests, review, processing, commission reversal
+
+**Files:**
+- Create: `backend/migrations/004_refunds.sql`, `backend/src/Refunds/RefundService.php`, `backend/src/Controllers/RefundController.php`, `backend/src/Controllers/AdminRefundController.php`
+- Modify: `backend/src/Razorpay/Gateway.php`, `RazorpayGateway.php`, `FakeGateway.php` (add `refund`), `backend/src/Controllers/WebhookController.php`, `backend/src/routes.php`, `backend/README.md`
+- Test: `backend/tests/refund_test.php`, `backend/tests/order_test.sh` (§7)
+
+**Interfaces:**
+- Produces (schema, 004): `refunds(id, order_id FK, payment_id FK, requested_by_user_id INT NULL, reviewed_by_admin_id INT NULL, status ENUM('requested','approved','processing','refunded','rejected','failed') NOT NULL DEFAULT 'requested', reason VARCHAR(500) NOT NULL, admin_note VARCHAR(500) NULL, amount DECIMAL(10,2) NOT NULL, razorpay_refund_id VARCHAR(100) NULL UNIQUE, is_open TINYINT GENERATED ALWAYS AS (IF(status IN ('requested','approved','processing','refunded'),1,NULL)) STORED, created_at, updated_at, UNIQUE KEY uq_open_refund (order_id, is_open))`; `commissions.status` enum extended to `('pending','payable','paid','reversed')` plus `paid_at DATETIME NULL`, `payout_reference VARCHAR(100) NULL`, `clawback_due TINYINT(1) NOT NULL DEFAULT 0`, `reversed_at DATETIME NULL`.
+- `Gateway::refund(string $razorpayPaymentId, int $amountPaise, string $receipt): array` → `['id'=>string,'status'=>string]`; Fake returns `rfnd_fake_<hex>` and status `processed`; live: `POST /v1/payments/{id}/refund`.
+- `RefundService::request(int $userId, int $orderId, string $reason): array` — only the owner's `paid` order; returns the existing open refund instead of a duplicate (**idempotent**); `approve(int $refundId, int $adminId, ?string $note): array` (→`approved` → calls gateway under a row lock → `processing`/`refunded`; gateway error ⇒ `failed`, retry via approve again); `reject(int $refundId, int $adminId, string $note): array` (note required); `adminOpen(int $orderId, int $adminId, string $reason): array` (creates directly `approved` then processes); `finalise(int $refundId): void` — one transaction on `refunded`: payment→`refunded`, order→`refunded`; digital ⇒ the order's access code → `revoked` (reason `refund`) and the redeemer's `book_access.revoked_at` set; hard copy ⇒ `fulfilment_status='cancelled'` when not yet `shipped`; commission `pending|payable`→`reversed` (`reversed_at`), `paid`→ stays `paid` with `clawback_due=1`; writes `audit_logs`.
+- Endpoints: `POST /api/me/orders/{id}/refund-request` `{reason}` (customer, owner) → 201/200 `{refund}`; `GET /api/me/refunds`; admin: `GET /api/admin/refunds?status=`, `POST /api/admin/refunds/{id}/approve|reject`, `POST /api/admin/orders/{id}/refund` ; webhook event `refund.processed` ⇒ `finalise` (idempotent via `payment_events`).
+
+- [ ] **Step 1: Write failing tests** — `refund_test.php`: duplicate `request` returns the same refund id and exactly one row exists even when two processes race; request on someone else's or unpaid order fails; `reject` without note fails; approve digital refund → order `refunded`, code `revoked`, redeemer's `book_access.revoked_at` set, redeem attempt → `code_revoked`; approve hard-copy refund before shipping → fulfilment `cancelled`; after `shipped` the refund still processes but fulfilment stays `shipped` and `audit_logs` records it; commission `pending`→`reversed`; commission already `paid`→ `clawback_due=1`; calling `finalise` twice changes nothing; gateway failure ⇒ status `failed` and a second approve succeeds. `order_test.sh` §7: HTTP flow request → admin approve → customer sees `refunded`, reader endpoint (Task 17) returns 403 afterwards, duplicate `refund.processed` webhook → 200 `duplicate`.
+- [ ] **Step 2: Run** `docker compose exec -T php php tests/refund_test.php` — Expected: FAIL.
+- [ ] **Step 3: Implement**; apply 004 to the dev DB additively.
+- [ ] **Step 4: Run** — Expected: PASS; regression gates.
+- [ ] **Step 5: Commit** — `feat(sp5): refund workflow with commission reversal and access revocation`
+
+---
+
+### Task 17: Secure reader backend (private PDF → authorised page images)
+
+**Files:**
+- Create: `backend/src/Reader/PdfPageRenderer.php`, `backend/src/Controllers/ReaderController.php`
+- Modify: `backend/Dockerfile` (add `poppler-utils`; keep the bullseye dev note), `backend/src/routes.php`, `backend/src/Controllers/BookController.php` (no payload change), `backend/README.md`
+- Test: `backend/tests/reader_test.php`, `backend/tests/order_test.sh` (§8)
+
+**Interfaces:**
+- Produces: `PdfPageRenderer::pageCount(int $bookId): int` (`pdfinfo` on `storage/books/{id}/book.pdf`, cached in `books.page_count`; add `page_count INT NULL` to migration 004); `PdfPageRenderer::pagePath(int $bookId, int $page): string` — renders on first request with `pdftoppm -jpeg -r 110 -f N -l N` into `storage/books/{id}/pages/{N}.jpg` under a file lock, returns the cached path; page and book ids are integers only (reuse the SP-4 path hardening, reject `<1` or `>pageCount`); binary and file errors ⇒ `ApiException(…,500,'render_failed')` without leaking paths.
+- `GET /api/books/{id}/access` (customer JWT) → `{owned: bool, status: 'active'|'revoked'|'none', pageCount?: int}`; `GET /api/books/{id}/read/pages/{n}` → `image/jpeg`, `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`; both require `book_access` for (caller, book) with `revoked_at IS NULL`, else 403 `forbidden`; page fetch limited to 240 / 5 min per user (`rate_limited`). The index and preview pages stay public SP-4 assets and never reveal full-book pages. The original PDF has no route.
+
+- [ ] **Step 1: Write failing tests** — `reader_test.php` (run in php container after Poppler is installed, using `backend/tests/fixtures/test.pdf` copied to a temp book dir): `pageCount` matches `pdfinfo`; `pagePath` creates then reuses the cached JPEG (second call does not re-spawn: mtime unchanged); page 0, `pageCount+1`, `-1`, `1;ls` rejected. `order_test.sh` §8 with the real dev books: user with a redeemed code gets 200 and `image/jpeg` for page 1 of book 2 and the response body starts with the JPEG magic bytes; user without access → 403; revoked access → 403; no token → 401; page out of range → 404/400; `curl /storage/books/2/book.pdf`, `/storage/books/2/pages/1.jpg` and `/uploads/books/2/book.pdf` → 404; 241st request in the window → 429.
+- [ ] **Step 2: Run** — Expected: FAIL.
+- [ ] **Step 3: Implement**; rebuild the php image (`docker compose up -d --build php`) and confirm `pdftoppm -v` works inside; use `proc_open` with an argument array (no shell string).
+- [ ] **Step 4: Run** — Expected: PASS; regression gates; confirm books 1 and 2 still intact (`/api/books` lists both).
+- [ ] **Step 5: Commit** — `feat(sp5): secure reader backend with private pdf rendering`
+
+---
+
+### Task 18: Reader frontend (page-turn, swipe, index, watermark)
+
+**Files:**
+- Create: `src/api/reader.js`, `src/components/reader/ReaderViewer.jsx`, `src/components/reader/ReaderViewer.test.jsx`
+- Modify (rewrite): `src/pages/ReaderPage.jsx`, `src/pages/ReaderPage.test.jsx`; modify `src/styles/site.css` (reader classes only, appended)
+
+**Interfaces:**
+- Produces: `fetchAccess(token, bookId)`, `fetchPageBlobUrl(token, bookId, page): Promise<string>` (authenticated `fetch` → `URL.createObjectURL`; revoke on unmount/page change). `ReaderPage` (`/read/:bookId`): token required; `fetchAccess` not owned ⇒ "You don't have access" with link to `/my-books` and `/books/{id}`; owned ⇒ `<ReaderViewer>`: current page image, **Prev/Next buttons, ArrowLeft/ArrowRight keys, horizontal swipe (touchstart/touchend delta > 50 px), jump-to-page input, "Page X of N"**, prefetch next page, loading and error states (403 ⇒ "Access revoked"), **index panel** toggle showing the public index (`book.indexUrl`: image or PDF in an `<iframe>`/link) beside — never inside — the full-book pages, watermark overlay "Licensed to {email} · {orderNumber|bookId}" repeated diagonally, `contextmenu`/`dragstart`/`user-select` blocked, `@media print { .reader { display:none } }`, and a small notice "Screenshots and screen recording cannot be fully prevented; this book is licensed to you only." Responsive: single page fits viewport width at ≤ 480 px, page + side index panel at ≥ 1024 px.
+
+- [ ] **Step 1: Write failing tests** (mock `api/reader`): not owned shows the no-access message and never calls `fetchPageBlobUrl`; owned shows page 1 and "Page 1 of 12"; Next/ArrowRight advance, Prev disabled on page 1, Next disabled on last page; simulated touch swipe left advances and right goes back; jump to page 5 requests page 5, out-of-range input is clamped; revoked (403) shows "Access revoked"; watermark contains the email; index toggle renders the index link/frame; notice text present; blob URLs revoked on unmount.
+- [ ] **Step 2: Run** `npx vitest run src/pages/ReaderPage.test.jsx src/components/reader` — Expected: FAIL.
+- [ ] **Step 3: Implement** (reuse `Header`; no new design system).
+- [ ] **Step 4: Run** `npm test` and `npm run build` — Expected: PASS (remove obsolete mock-reader tests rather than leaving them failing).
+- [ ] **Step 5: Commit** — `feat(sp5): paginated secure reader with swipe, index panel and watermark`
+
+---
+
+### Task 19: Admin backend — dashboard, orders, customers, codes, fulfilment, audit
+
+**Files:**
+- Create: `backend/src/Controllers/AdminDashboardController.php`, `AdminOrderController.php`, `AdminCustomerController.php`, `AdminCodeController.php`
+- Modify: `backend/src/routes.php`, `backend/README.md`
+- Test: `backend/tests/order_test.sh` (§9), `backend/tests/admin_authz_test.php`
+
+**Interfaces:**
+- All routes `AuthMiddleware::requireRole(['admin'])` (customer token ⇒ 403, none ⇒ 401), pagination `?page=&perPage=` (default 25, max 100).
+- `GET /api/admin/dashboard` → `{publishedBooks, totalCustomers, digitalPurchases, hardcopyOrders, successfulPayments, pendingOrders, revenue, refundedAmount, pendingRefunds, commissionPending, commissionPayable}` (paid orders only; amounts ₹ numbers).
+- `GET /api/admin/orders?q=&type=&status=&fulfilment=&page=` — `q` matches order number, customer name/email/phone, tracking code (exact), or **digital code last 4 / a pasted full code** (hash lookup, exact); rows: `{id, orderNumber, customer:{id,name,email}, book:{id,title}, purchaseType, status, amount, paidAt, createdAt, razorpayPaymentId, digitalCode:{status,last4}|null, trackingCode|null, fulfilmentStatus, adminFlag}`; `GET /api/admin/orders/{id}` adds `breakdown`, `address` (hard copy), `refunds[]`, `commission`, `auditLog[]` (never plaintext codes).
+- `PUT /api/admin/orders/{id}/fulfilment` `{status, courier?, trackingNumber?}` — hard-copy paid orders only; allowed forward transitions `confirmed→processing→shipped→out_for_delivery→delivered` (may skip `out_for_delivery`), `cancelled` from any non-delivered state; `shipped` requires `courier`; sets `shipped_at`; illegal transition ⇒ 400 `invalid_transition`; audit row. Only these states are exposed (no invented ones).
+- `GET /api/admin/customers?q=` → `{id,name,email,phone,createdAt,orderCount,paidTotal}`; `GET /api/admin/customers/{id}` → profile + their orders.
+- Codes: `POST /api/admin/codes/verify` `{code}` → `{status, bookTitle, orderNumber, orderStatus, redeemed:bool}` (hash lookup; never echoes the code); `POST /api/admin/orders/{id}/code/revoke` `{reason}`; `POST /api/admin/orders/{id}/code/reissue` `{reason}` → `{code}` (**the only response that ever contains a plaintext code to an admin; once**), both call `AccessCodeService` with the admin id; `GET /api/admin/audit-logs?entityType=&entityId=&page=`. Admin attempts to verify/reissue are rate limited (30 / 10 min).
+
+- [ ] **Step 1: Write failing tests** — `admin_authz_test.php`/`order_test.sh` §9: every admin route above returns 401 without token and 403 with a customer token; dashboard numbers equal SQL counts after seeding known orders; search finds an order by order number, by email fragment, by tracking code, by full pasted digital code, by last4; fulfilment: valid chain works, skipping to `delivered` from `confirmed` ⇒ `invalid_transition`, `shipped` without courier ⇒ 400, digital order ⇒ 400, customer immediately sees the new status via `/api/me/orders/{id}` and `/api/track/{code}`; verify code reports `revoked` after revoke; reissue returns a code whose hash redeems and the old code is `code_revoked`; neither list nor detail responses contain the plaintext code (grep the JSON); audit rows exist for revoke/reissue/fulfilment.
+- [ ] **Step 2: Run** — Expected: FAIL.
+- [ ] **Step 3: Implement**; reuse `OrderFormatter` and `AccessCodeService`; SQL with prepared statements only.
+- [ ] **Step 4: Run** — Expected: PASS; regression gates.
+- [ ] **Step 5: Commit** — `feat(sp5): admin api for orders, customers, codes, fulfilment and dashboard`
+
+---
+
+### Task 20: Referral partners and commissions backend
+
+**Files:**
+- Create: `backend/src/Controllers/ReferralApplicationController.php`, `AdminReferralController.php`, `AdminCommissionController.php`, `backend/src/Referral/CommissionService.php`
+- Modify: `backend/src/routes.php`, `backend/README.md`
+- Test: `backend/tests/commission_test.php`, `backend/tests/order_test.sh` (§10)
+
+**Interfaces:**
+- `POST /api/referral/applications` (public, 5 / hour per IP) `{name, qualification?, place?, district?, status, phone, whatsapp, upiId?, gmail}` validated like the existing columns (`status` ∈ Student|Scholarship|Faculty|Institution; phone/whatsapp 10-digit Indian) → 201.
+- Admin: `GET /api/admin/referrals?status=` (applications + partners); `POST /api/admin/referrals/{applicationId}/approve` → creates `referral_partners` with `referral_code` `VTP-` + 6 Crockford chars (unique, random) and sets `application_status='approved'`, `reviewed_at`; `POST …/reject`; `POST /api/admin/partners/{id}/toggle-active`; `PUT /api/admin/partners/{id}` (contact/UPI edits).
+- `CommissionService`: `ratesRupees(): array{digital:string,hardcopy:string}` and `setRates(string $digital, string $hardcopy, int $adminId): void` over `settings.commission_rate_*` (flat ₹, validated `0 ≤ x ≤ 10000`, 2 decimals, audit row); `markPayable(int $commissionId, int $adminId)`, `markPaid(int $commissionId, int $adminId, string $payoutReference)` (only from `payable`; reference required). Endpoints: `GET /api/admin/commissions?status=&partnerId=&page=` → rows with partner, order number, type, amount, status, payout reference + totals by status; `POST /api/admin/commissions/{id}/payable|paid`; `GET/PUT /api/admin/settings/commission`; `GET /api/admin/settings/pricing` / `PUT` for `shipping_charge_*`, `gst_percent_*`, `gst_mode` (so U1/U2 are set in the panel, audited).
+- Rule reminders: commission rows are created only by `markPaid` (Task 6); a changed rate never touches existing rows; `reversed` rows cannot be paid; partner deactivation does not change history.
+
+- [ ] **Step 1: Write failing tests**: application validation errors; approve creates a partner with a unique code that `GET /api/referral/validate/{code}` accepts and attributes on a new order; reject keeps no partner; toggle inactive makes the code unknown; `setRates('30','25')` affects only later orders (old row stays `25.00`); `markPaid` without reference ⇒ 400; `markPaid` on `pending` ⇒ `invalid_transition`; `reversed` cannot become payable; all routes 401/403 for non-admins.
+- [ ] **Step 2: Run** — Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** — Expected: PASS; regression gates.
+- [ ] **Step 5: Commit** — `feat(sp5): referral partner administration and flat commission tracking`
+
+---
+
+### Task 21: Admin Panel frontend on the real API
+
+**Files:**
+- Create: `src/api/admin.js`, `src/pages/admin/AdminOrderDetail.jsx` (drawer/section inside Orders), `src/pages/admin/AdminCodesPanel.jsx`, `src/pages/admin/AdminSettingsPage.jsx` (route `/admin/settings`), tests beside each page
+- Modify (rewrite from `useSession` mock to real API with the `vtee-admin-token`): `AdminDashboardPage.jsx`, `AdminOrdersPage.jsx`, `AdminCustomersPage.jsx`, `AdminReferralsPage.jsx`, `AdminCommissionsPage.jsx`; `AdminLayout.jsx` (add Settings nav link only), `ReferralRegisterPage.jsx` (post to the real application endpoint), `src/App.jsx`; update their existing tests; `AdminBooksPage` stays as is, plus an editable provisional-description note is **not** needed (descriptions already editable there)
+- Modify: `src/context/SessionContext.jsx` — delete mock orders/referral/commission/book reducer cases and `data/books.js`, `data/referralPartners.js` **only after** no import remains (`grep` first); keep auth state
+
+**Interfaces:**
+- Produces: `src/api/admin.js` functions mirroring Tasks 16, 19, 20 (`fetchDashboard`, `fetchAdminOrders(params)`, `fetchAdminOrder`, `updateFulfilment`, `verifyCode`, `revokeCode`, `reissueCode`, `fetchAdminCustomers`, `fetchRefunds`, `approveRefund`, `rejectRefund`, `fetchReferrals`, `approveReferral`, `rejectReferral`, `togglePartner`, `fetchCommissions`, `markCommissionPayable`, `markCommissionPaid`, `fetchCommissionSettings`, `saveCommissionSettings`, `fetchPricingSettings`, `savePricingSettings`, `fetchAuditLogs`) — all via `apiRequest` with the admin token.
+- Screens: **Dashboard** (the summary cards from Task 19); **Orders** (search box, type/status/fulfilment filters, table; row opens detail with customer, breakdown, address, payment id, code status + last4, refunds, audit; hard-copy **fulfilment form** with courier + tracking number and only legal next statuses offered; **code panel**: verify a pasted code, revoke with reason, reissue with reason — the new code is shown once in a dismissible box with a "give this to the customer" note and is never stored in React state beyond that box); **Customers** (list + detail); **Refunds** (queue with approve/reject + note); **Referrals** (applications/partners, approve/reject/toggle); **Commissions** (rates form in ₹, rows, mark payable/paid with payout reference); **Settings** (shipping / GST per type with the unconfirmed-business-rule notice). Loading, empty and error states; tables scroll horizontally on mobile. Existing admin styling and layout kept.
+
+- [ ] **Step 1: Write failing tests** (spy on `api/admin`): each page renders API rows (no mock data); Orders search triggers the API with `q`; illegal fulfilment options are not offered; reissue shows the code once and it disappears on dismiss; revoke requires a reason; commissions `markPaid` requires a payout reference; non-admin/401 response sends the user to the login screen; Settings saves and shows server validation errors; no test or component imports `SessionContext` order/book/referral state.
+- [ ] **Step 2: Run** `npx vitest run src/pages/admin` — Expected: FAIL.
+- [ ] **Step 3: Implement**, then delete the mock reducer cases/seed data and fix imports.
+- [ ] **Step 4: Run** `npm test` and `npm run build` — Expected: PASS; no dead mock code left (`grep -rn "CREATE_ORDER\|seedBooks\|seedReferralPartners" src` is empty).
+- [ ] **Step 5: Commit** — `feat(sp5): real admin panel screens on the php api`
+
+---
+
+### Task 15 (final, run last): End-to-end verification, responsive check and deployment handover
+
+**Files:**
+- Create: `docs/deployment/SP5-handover.md`
+- Modify: `backend/TEST_RESULTS.md`
+
+- [ ] **Step 1: Full automated pass** — every `backend/tests/*_test.php`, `book_test.sh`, `http_test.sh`, `order_test.sh`, `npm test`, `npm run build`. Expected: zero failures.
+- [ ] **Step 2: Browser E2E (Chrome DevTools/Playwright MCP) against the local stack on the fake gateway**, using the two real books: (a) admin logs in, sees both books and edits a description; (b) customer registers, buys the digital English book (fake payment path with a signed fake payment), sees the code, redeems it in My Books, reads pages 1–3 of the real PDF with next/prev/swipe emulation; (c) buys the hard-copy Tamil book with address → tracking code → `/track` shows Order Confirmed; (d) admin moves it to Processing → Shipped (courier + number) → customer sees the update; (e) invalid code, same code by a second user, revoked code, failed payment, duplicate webhook; (f) refund request → admin approves → access revoked, commission reversed; (g) a second customer cannot open the first's reader pages. Record screenshots paths in `TEST_RESULTS.md`.
+- [ ] **Step 3: Responsive** — resize to 1280, 820 and 390 px wide and screenshot Books, Book detail, Checkout, My Books, Reader, Admin Orders; fix horizontal overflow or unreadable layouts found (small CSS-only fixes in this task).
+- [ ] **Step 4: Real Razorpay test mode** (needs the owner's test keys, U6) — as in the earlier Task 15 steps; if keys are absent, record "not run: keys required".
+- [ ] **Step 5: Write `docs/deployment/SP5-handover.md`** covering: features completed / retained; issues found and fixed; modified files and migrations 003 and 004 with the exact apply order and a backup-first note (existing production data preserved — additive only); env vars (names only, no values): `APP_ENV`, `RAZORPAY_GATEWAY`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `CODE_SECRET`, `JWT_SECRET`, `FRONTEND_ORIGIN`, DB vars; PHP/MySQL and nginx deployment steps (`poppler-utils`, `storage/` and `public/uploads/` writable and **outside the web root for storage**, upload limits, cron lines for `reconcile_orders.php`, real-client-IP configuration for rate limits); frontend build with `VITE_API_URL=<live API URL>` and `dist` upload; admin URL `/admin` on the frontend origin, creating the admin with `scripts/seed_admin.php` (strong password, not committed); loading the two books through the live Admin Panel using the saved covers and PDFs (file names listed, nothing duplicated if they already exist); webhook setup in the Razorpay dashboard (URL, events `payment.captured`, `payment.failed`, `refund.processed`); testing results; open business decisions (U1 shipping, U2 GST, U3 refund windows, U4 commission hold, U6 Razorpay account, U7 hosting, descriptions/categories approval, email deferred). No secrets in the document.
+- [ ] **Step 6: Commit** — `docs(sp5): verification results and deployment handover`
+- [ ] **Step 7 (separate step, owner action):** deploying to the live site and verifying the live Books page in a browser is **not done by this plan**; it needs hosting access (U7) and explicit approval. The controller stops and asks at this point.
 
 ---
 
