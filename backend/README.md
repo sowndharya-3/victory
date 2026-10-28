@@ -25,7 +25,10 @@ full design.
 ## Environment variables
 
 See `backend/.env.example` for the full list: `DB_HOST`, `DB_PORT`,
-`DB_NAME`, `DB_USER`, `DB_PASS`, `JWT_SECRET`, `FRONTEND_ORIGIN`.
+`DB_NAME`, `DB_USER`, `DB_PASS`, `JWT_SECRET`, `FRONTEND_ORIGIN`, plus the SP-5 keys
+`APP_ENV`, `RAZORPAY_GATEWAY` (`fake` is dev-only), `RAZORPAY_KEY_ID`,
+`RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `CODE_SECRET` (>=32 random bytes).
+These are validated lazily at use, so SP-4 endpoints work without them.
 
 ## Migrations
 
@@ -34,7 +37,12 @@ Apply the initial schema against the running stack:
 
 ```bash
 docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/001_init.sql
+# then 002_book_management.sql and 003_orders_payments.sql, in order
 ```
+
+Migrations are one-shot: re-applying a file fails on "already exists" /
+duplicate column and changes no data. 003 is additive only; never drop the
+volume to re-run it.
 
 ## API endpoints
 
