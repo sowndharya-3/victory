@@ -5,12 +5,44 @@ namespace App\Orders;
 use App\Database\Db;
 use App\Razorpay\Gateway;
 
-/** Cron sweep: fulfils pending orders the gateway reports captured, expires abandoned ones. Never sets 'paid' itself. */
+/**
+ * Cron sweep: fulfils pending orders the gateway reports captured, expires abandoned ones, and re-checks
+ * recent failed/cancelled orders for a capture whose webhook was lost. Never sets 'paid' itself.
+ */
 class OrderReconciler
 {
     /** @return array{paid:int,cancelled:int,errors:int} */
-    public static function run(Gateway $gateway, int $minAgeMinutes = 15, int $expireAfterHours = 24): array
+    public static function run(Gateway $gateway, int $minAgeMinutes = 15, int $expireAfterHours = 24, int $recheckDays = 7): array
     {
+        $result = ['paid' => 0, 'cancelled' => 0, 'errors' => 0];
+
+        // Pass 1 (runs first so orders expired below are not re-queried this run): failed/cancelled orders
+        // that were captured anyway (e.g. a retry succeeded, webhook lost). markPaid only; nothing else is modified.
+        $stmt = Db::connection()->prepare(
+            "SELECT o.id, p.razorpay_order_id
+               FROM orders o JOIN payments p ON p.order_id = o.id
+              WHERE o.status IN ('failed', 'cancelled') AND o.created_at >= NOW() - INTERVAL ? DAY AND p.razorpay_order_id IS NOT NULL
+              ORDER BY o.id"
+        );
+        $stmt->execute([$recheckDays]);
+        foreach ($stmt->fetchAll() as $row) {
+            $rzp = $row['razorpay_order_id'];
+            try {
+                foreach ($gateway->fetchOrderPayments($rzp) as $p) {
+                    if (($p['status'] ?? '') === 'captured') {
+                        if (OrderFulfillment::markPaid($rzp, (string) $p['id'], (int) $p['amount'], $p) === 'paid') {
+                            $result['paid']++;
+                        }
+                        break;
+                    }
+                }
+            } catch (\Throwable $e) {
+                $result['errors']++;
+                error_log("reconcile: order {$row['id']} failed: " . get_class($e) . ': ' . $e->getMessage());
+            }
+        }
+
+        // Pass 2: pending orders.
         $stmt = Db::connection()->prepare(
             "SELECT o.id, p.razorpay_order_id, o.created_at <= NOW() - INTERVAL ? HOUR AS expirable
                FROM orders o JOIN payments p ON p.order_id = o.id
@@ -18,8 +50,6 @@ class OrderReconciler
               ORDER BY o.id"
         );
         $stmt->execute([$expireAfterHours, $minAgeMinutes]);
-
-        $result = ['paid' => 0, 'cancelled' => 0, 'errors' => 0];
         foreach ($stmt->fetchAll() as $row) {
             $rzp = $row['razorpay_order_id'];
             try {

@@ -1,6 +1,7 @@
 <?php
 
-// Cron (every 15 min): fulfil captured-but-missed pending orders, expire abandoned ones, purge old rate_limits.
+// Cron (every 15 min): fulfil captured-but-missed pending/failed/cancelled orders, expire abandoned ones, purge old rate_limits.
+// Exit: 0 ok, 2 some orders errored (counts still printed), 1 fatal.
 
 require_once __DIR__ . '/../config/env.php';
 loadEnv(__DIR__ . '/../.env');
@@ -24,6 +25,7 @@ try {
     $r = OrderReconciler::run(GatewayFactory::make());
     $purged = OrderReconciler::purgeRateLimits();
     echo "paid={$r['paid']} cancelled={$r['cancelled']} errors={$r['errors']} purged={$purged}\n";
+    exit($r['errors'] > 0 ? 2 : 0);
 } catch (\Throwable $e) {
     fwrite(STDERR, 'reconcile failed: ' . get_class($e) . ': ' . $e->getMessage() . "\n");
     exit(1);

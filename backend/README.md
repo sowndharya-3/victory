@@ -93,14 +93,21 @@ docker compose exec -T php php scripts/seed_admin.php <username> <password>
 
 `scripts/reconcile_orders.php` fulfils pending orders (older than 15 min) that
 Razorpay reports captured, via the normal paid path; cancels pending orders
-older than 24 h with no capture (payment `failed`, reason `expired`); and purges
-`rate_limits` rows older than 2 days. It prints
-`paid=N cancelled=N errors=N purged=N` and exits non-zero only on a fatal error.
-Run it every 15 minutes:
+older than 24 h with no capture (payment `failed`, reason `expired`); re-checks
+`failed`/`cancelled` orders from the last 7 days and fulfils any Razorpay reports
+captured (e.g. a retry succeeded but the webhook was lost; nothing else is changed
+on those orders); and purges `rate_limits` rows older than 2 days. It prints
+`paid=N cancelled=N errors=N purged=N` and exits `0` on success, `2` if any order
+errored (counts still printed; see the log for details), `1` on a fatal error.
+
+An order flagged `admin_flag = amount_mismatch` (captured amount differs from the
+order) stays `pending` and is re-polled every run until an admin resolves it.
+
+Run it every 15 minutes, with `flock -n` so a slow run is never overlapped:
 
 ```cron
-*/15 * * * * cd /path/to/vtee && docker compose exec -T php php scripts/reconcile_orders.php >> /var/log/vtee-reconcile.log 2>&1
-# without Docker: */15 * * * * cd /path/to/vtee/backend && php scripts/reconcile_orders.php >> /var/log/vtee-reconcile.log 2>&1
+*/15 * * * * cd /path/to/vtee && flock -n /tmp/vtee-reconcile.lock docker compose exec -T php php scripts/reconcile_orders.php >> /var/log/vtee-reconcile.log 2>&1
+# without Docker: */15 * * * * cd /path/to/vtee/backend && flock -n /tmp/vtee-reconcile.lock php scripts/reconcile_orders.php >> /var/log/vtee-reconcile.log 2>&1
 ```
 
 ## Test results

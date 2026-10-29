@@ -88,11 +88,21 @@ try {
     $race = mkOrder(25 * 60);      // webhook lands mid-run => stays paid
     $held = mkOrder(25 * 60);      // authorized (not captured) => not expired yet
 
-    // Every other eligible pending order in the DB is foreign: the stub throws for it, so it is never touched.
-    $ours = [$fresh, $stale, $young, $lateCap, $paid, $notYet, $boom, $race, $held];
+    // Second pass: failed/cancelled orders from the last 7 days whose money arrived anyway.
+    $failBoom = mkOrder(60, 'failed');               // gateway throws => untouched, error counted, others still run
+    $failRetry = mkOrder(60, 'failed');              // first attempt failed, retry captured, webhook lost => paid
+    $cancCap = mkOrder(3 * 24 * 60, 'cancelled');    // captured => paid
+    $failNone = mkOrder(60, 'failed');               // nothing captured => untouched
+    $cancNone = mkOrder(2 * 24 * 60, 'cancelled');   // authorized only => untouched (never expired/modified)
+    $failOld = mkOrder(8 * 24 * 60, 'failed');       // older than 7 days => not queried
+
+    // Every other eligible order in the DB is foreign: the stub throws for it, so it is never touched.
+    $ours = [$fresh, $stale, $young, $lateCap, $paid, $notYet, $boom, $race, $held, $failBoom, $failRetry, $cancCap, $failNone, $cancNone, $failOld];
     $ourIds = implode(',', array_map(fn ($o) => $o['id'], $ours));
     $foreign = (int) val("SELECT COUNT(*) FROM orders o JOIN payments p ON p.order_id = o.id
          WHERE o.status = 'pending' AND o.created_at <= NOW() - INTERVAL 15 MINUTE AND p.razorpay_order_id IS NOT NULL AND o.id NOT IN ($ourIds)");
+    $foreign += (int) val("SELECT COUNT(*) FROM orders o JOIN payments p ON p.order_id = o.id
+         WHERE o.status IN ('failed', 'cancelled') AND o.created_at >= NOW() - INTERVAL 7 DAY AND p.razorpay_order_id IS NOT NULL AND o.id NOT IN ($ourIds)");
 
     $gateway = new class implements Gateway {
         public array $map = [];
@@ -127,14 +137,36 @@ try {
             OrderFulfillment::markPaid($race['rzp'], "pay_{$tag}r", 49900); // the webhook wins between select and expire
             return [];
         },
+        $failRetry['rzp'] => [['id' => "pay_{$tag}fr0", 'order_id' => $failRetry['rzp'], 'amount' => 49900, 'status' => 'failed'], captured($failRetry['rzp'], "pay_{$tag}fr1")],
+        $cancCap['rzp'] => [captured($cancCap['rzp'], "pay_{$tag}cc")],
+        $failNone['rzp'] => [['id' => "pay_{$tag}fn", 'order_id' => $failNone['rzp'], 'amount' => 49900, 'status' => 'failed']],
+        $cancNone['rzp'] => [['id' => "pay_{$tag}cn", 'order_id' => $cancNone['rzp'], 'amount' => 49900, 'status' => 'authorized']],
+        $failOld['rzp'] => [captured($failOld['rzp'], "pay_{$tag}fo")],
     ];
 
     $res = OrderReconciler::run($gateway);
 
     check('result keys paid/cancelled/errors', isset($res['paid'], $res['cancelled'], $res['errors']), json_encode($res));
-    check('paid count 2', ($res['paid'] ?? null) === 2, json_encode($res));
+    check('paid count 4 (2 pending + 2 failed/cancelled)', ($res['paid'] ?? null) === 4, json_encode($res));
     check('cancelled count 1', ($res['cancelled'] ?? null) === 1, json_encode($res));
-    check('errors = thrown + foreign', ($res['errors'] ?? null) === 1 + $foreign, json_encode($res) . " foreign=$foreign");
+    check('errors = 2 thrown + foreign', ($res['errors'] ?? null) === 2 + $foreign, json_encode($res) . " foreign=$foreign");
+
+    check('failed order, retry captured => paid + code issued', status($failRetry['id']) === 'paid'
+        && val('SELECT razorpay_payment_id FROM payments WHERE order_id = ?', [$failRetry['id']]) === "pay_{$tag}fr1"
+        && (int) val("SELECT COUNT(*) FROM access_codes WHERE order_id = ? AND status = 'active'", [$failRetry['id']]) === 1);
+    check('cancelled order, captured => paid', status($cancCap['id']) === 'paid'
+        && val('SELECT status FROM payments WHERE order_id = ?', [$cancCap['id']]) === 'captured');
+    check('failed order, no capture => untouched', status($failNone['id']) === 'failed'
+        && val('SELECT status FROM payments WHERE order_id = ?', [$failNone['id']]) === 'created'
+        && in_array($failNone['rzp'], $gateway->calls, true));
+    check('cancelled order, authorized only => untouched', status($cancNone['id']) === 'cancelled'
+        && val('SELECT status FROM payments WHERE order_id = ?', [$cancNone['id']]) === 'created'
+        && in_array($cancNone['rzp'], $gateway->calls, true));
+    check('failed order older than 7 days => not queried, untouched', status($failOld['id']) === 'failed' && !in_array($failOld['rzp'], $gateway->calls, true));
+    check('gateway throws on failed order => untouched, later ones still processed', status($failBoom['id']) === 'failed'
+        && in_array($failBoom['rzp'], $gateway->calls, true)
+        && array_search($failBoom['rzp'], $gateway->calls, true) < array_search($failRetry['rzp'], $gateway->calls, true));
+    check('order cancelled this run is not re-queried', count(array_keys($gateway->calls, $stale['rzp'], true)) === 1);
 
     check('20-min captured => paid', status($fresh['id']) === 'paid');
     check('20-min captured => access code issued', (int) val("SELECT COUNT(*) FROM access_codes WHERE order_id = ? AND status = 'active'", [$fresh['id']]) === 1);
