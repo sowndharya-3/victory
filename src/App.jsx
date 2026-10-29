@@ -8,6 +8,7 @@ import BooksPage from './pages/BooksPage'
 import BookDetailPage from './pages/BookDetailPage'
 import ReferralRegisterPage from './pages/ReferralRegisterPage'
 import CheckoutPage from './pages/CheckoutPage'
+import OrderResultPage from './pages/OrderResultPage'
 import ReaderPage from './pages/ReaderPage'
 import AccountPage from './pages/AccountPage'
 import AdminLayout from './pages/admin/AdminLayout'
@@ -42,6 +43,7 @@ function App() {
           <Route path="/books/:id" element={<BookDetailPage />} />
           <Route path="/referral/register" element={<ReferralRegisterPage />} />
           <Route path="/checkout/:bookId" element={<CheckoutPage />} />
+          <Route path="/orders/:orderId/result" element={<OrderResultPage />} />
           <Route path="/read/:bookId" element={<ReaderPage />} />
           <Route path="/account" element={<AccountPage />} />
           <Route path="/admin" element={<AdminLayout />}>

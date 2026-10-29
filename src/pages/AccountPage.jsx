@@ -1,7 +1,8 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useState, useEffect } from 'react'
 import { useSession } from '../context/SessionContext'
 import { registerCustomer, loginCustomer } from '../api/auth'
+import { fetchMyOrders } from '../api/orders'
+import { fulfilmentLabel, money, shortDate } from '../utils/orderLabels'
 import Header from '../components/home/Header'
 import Footer from '../components/home/Footer'
 
@@ -11,6 +12,19 @@ function AccountPage() {
   const [form, setForm] = useState({ name: '', email: '', password: '' })
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  const [orders, setOrders] = useState(null) // null = loading
+  const [ordersError, setOrdersError] = useState('')
+  const loggedIn = Boolean(state.customerEmail)
+
+  useEffect(() => {
+    if (!loggedIn) return undefined
+    let cancelled = false
+    fetchMyOrders(localStorage.getItem('vtee-auth-token'))
+      .then(list => { if (!cancelled) setOrders(list) })
+      .catch(err => { if (!cancelled) setOrdersError(err.message) })
+    return () => { cancelled = true }
+  }, [loggedIn])
 
   const update = (field) => (e) => setForm(f => ({ ...f, [field]: e.target.value }))
 
@@ -64,24 +78,24 @@ function AccountPage() {
     )
   }
 
-  const myPaidOrders = state.orders.filter(o => o.customerEmail === state.customerEmail && o.paymentStatus === 'paid')
-
   return (
     <>
       <Header />
       <div className="container">
-        <h2>My Books</h2>
-        {myPaidOrders.length === 0 && <p>No purchased books yet.</p>}
+        <h2>My Orders</h2>
+        <div aria-live="polite">
+          {ordersError && <p className="form-error">{ordersError}</p>}
+          {!ordersError && orders === null && <p>Loading orders…</p>}
+          {orders?.length === 0 && <p>No orders yet.</p>}
+        </div>
         <ul>
-          {myPaidOrders.map(order => {
-            const book = state.books.find(b => b.id === order.bookId)
-            return (
-              <li key={order.id}>
-                {book?.title} ({order.purchaseType})
-                {order.purchaseType === 'digital' && <Link to={`/read/${order.bookId}`}> Read</Link>}
-              </li>
-            )
-          })}
+          {orders?.map(o => (
+            <li key={o.id}>
+              <strong>{o.bookTitle}</strong> ({o.purchaseType === 'hardcopy' ? 'Hard copy' : 'Digital'}) · {o.orderNumber} · {o.status}
+              {o.purchaseType === 'hardcopy' && o.status === 'paid' && <> · {fulfilmentLabel(o.fulfilmentStatus)}</>}
+              {' '}· {money(o.total)} · {shortDate(o.createdAt)}
+            </li>
+          ))}
         </ul>
       </div>
       <Footer />
