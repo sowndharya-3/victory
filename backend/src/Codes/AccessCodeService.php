@@ -9,7 +9,8 @@ use RuntimeException;
 
 /**
  * Digital access codes. book_access is written ONLY by redeem() (and revoked by reissue/revoke).
- * Lock order everywhere: orders row, then access_codes rows (markPaid: payments, orders, then inserts here).
+ * Lock order everywhere: orders row, then access_codes rows, then (redeem) the users row and book_access
+ * (markPaid: payments, orders, then inserts here).
  * Plaintext lives only in code_enc (AES-GCM) until redeemed/revoked; never logged, never in audit detail.
  */
 class AccessCodeService
@@ -44,7 +45,7 @@ class AccessCodeService
         if (!$row) {
             return null;
         }
-        $plain = CodeCipher::decrypt($row['code_enc']);
+        $plain = CodeCipher::decrypt($row['code_enc'], (string) $orderId);
         if ($plain === null) {
             error_log("access code {$row['id']}: code_enc failed to decrypt (tampered or CODE_SECRET changed)");
             return null;
@@ -90,7 +91,11 @@ class AccessCodeService
                 throw new ApiException('This code has already been redeemed', 409, 'code_already_redeemed');
             }
             // Don't burn a code (and re-point access to another order) when the user already reads this book.
-            $stmt = $db->prepare('SELECT COUNT(*) FROM book_access WHERE user_id = ? AND book_id = ? AND revoked_at IS NULL');
+            // The users row lock serialises this user's redeems, so two codes for one book can't both pass;
+            // FOR UPDATE makes the check a current read, not the transaction snapshot.
+            // ponytail: per-user lock, not per (user, book); fine at one redeem per human at a time.
+            $db->prepare('SELECT id FROM users WHERE id = ? FOR UPDATE')->execute([$userId]);
+            $stmt = $db->prepare('SELECT COUNT(*) FROM book_access WHERE user_id = ? AND book_id = ? AND revoked_at IS NULL FOR UPDATE');
             $stmt->execute([$userId, $c['book_id']]);
             if ((int) $stmt->fetchColumn() > 0) {
                 throw new ApiException('You already own this book', 409, 'already_owned');
@@ -117,6 +122,14 @@ class AccessCodeService
             $stmt = $db->prepare('SELECT * FROM access_codes WHERE order_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE');
             $stmt->execute([$orderId]);
             $old = $stmt->fetch();
+            // Customer path: never take back access someone else redeemed, or undo an admin revoke.
+            if ($adminId === null && $old && !(
+                $old['status'] === 'active'
+                || ($old['status'] === 'redeemed' && (int) $old['redeemed_by_user_id'] === (int) $order['user_id'])
+                || ($old['status'] === 'revoked' && $old['revoked_reason'] === 'customer_request')
+            )) {
+                throw new ApiException('Please contact support to reissue this code', 403, 'reissue_requires_admin');
+            }
             if ($old && $old['status'] !== 'revoked') {
                 self::revokeRow($old, $reason);
             }
@@ -172,7 +185,7 @@ class AccessCodeService
             try {
                 // UNHEX keeps the binary ciphertext out of the connection charset.
                 $db->prepare('INSERT INTO access_codes (order_id, user_id, book_id, code_hash, code_last4, code_enc) VALUES (?, ?, ?, ?, ?, UNHEX(?))')
-                    ->execute([$order['id'], $order['user_id'], $order['book_id'], CodeCipher::hash($code), substr($code, -4), bin2hex(CodeCipher::encrypt($code))]);
+                    ->execute([$order['id'], $order['user_id'], $order['book_id'], CodeCipher::hash($code), substr($code, -4), bin2hex(CodeCipher::encrypt($code, (string) $order['id']))]);
                 return ['id' => (int) $db->lastInsertId(), 'code' => CodeGenerator::format($code)];
             } catch (PDOException $e) {
                 if ((string) $e->getCode() !== '23000' || !str_contains($e->getMessage(), 'code_hash')) {
@@ -196,7 +209,8 @@ class AccessCodeService
             ->execute([$adminId, $userId, $action, $entityId, json_encode($detail)]);
     }
 
-    private static function transaction(callable $fn): mixed
+    /** Runs $fn in a transaction; a deadlock (1213, whole transaction rolled back) is retried once. */
+    private static function transaction(callable $fn, bool $retry = true): mixed
     {
         $db = Db::connection();
         $db->beginTransaction();
@@ -207,6 +221,9 @@ class AccessCodeService
         } catch (\Throwable $e) {
             if ($db->inTransaction()) {
                 $db->rollBack();
+            }
+            if ($retry && $e instanceof PDOException && ($e->errorInfo[1] ?? null) === 1213) {
+                return self::transaction($fn, false);
             }
             throw $e;
         }

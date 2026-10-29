@@ -425,6 +425,12 @@ post_json "$TOKEN_G" "/api/me/redeem" "{\"code\":\"$DCODE\"}"
 check "second user redeems same code -> 409 code_already_redeemed, no access" "$([ "$PCODE" = "409" ] && jh "$P" '"code":"code_already_redeemed"' && [ "$(sql "SELECT COUNT(*) FROM book_access WHERE user_id=$UID_G")" = "0" ] && echo true || echo false)"
 post_json "$ADMIN_TOKEN" "/api/me/redeem" "{\"code\":\"$DCODE\"}"
 check "admin token on redeem -> 403" "$([ "$PCODE" = "403" ] && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/me/orders/$CF/access-code"
+check "admin token on GET access-code -> 403" "$([ "$GCODE" = "403" ] && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/me/orders/$CF/reissue-code" '{}'
+check "admin token on POST reissue-code -> 403" "$([ "$PCODE" = "403" ] && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/me/library"
+check "admin token on GET library -> 403" "$([ "$GCODE" = "403" ] && echo true || echo false)"
 
 CODES=""
 for i in 1 2 3 4 5 6; do
@@ -469,6 +475,17 @@ get_json "$TOKEN_F" "/api/me/orders/$TH/access-code"
 check "hardcopy order has no access code -> 404" "$([ "$GCODE" = "404" ] && echo true || echo false)"
 get_json "" "/api/track/VTT-00000000"
 check "unknown tracking code -> 404 not_found" "$([ "$GCODE" = "404" ] && jh "$G" '"code":"not_found"' && echo true || echo false)"
+
+# Track limit: 10/min per IP (fixed 60s window; avoid straddling the boundary)
+SEC=$((10#$(date +%S)))
+[ "$SEC" -gt 45 ] && sleep $((61 - SEC))
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'track:%';"
+CODES=""
+for i in $(seq 1 11); do
+  CODES="$CODES $(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/api/track/VTT-00000000")"
+done
+check "track: 10 lookups a minute -> 404 each, 11th -> 429" "$([ "$CODES" = " 404 404 404 404 404 404 404 404 404 404 429" ] && echo true || echo false)"
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'track:%';"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
