@@ -43,12 +43,12 @@ Apply the initial schema against the running stack:
 
 ```bash
 docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/001_init.sql
-# then 002_book_management.sql and 003_orders_payments.sql, in order
+# then 002_book_management.sql, 003_orders_payments.sql and 004_refunds.sql, in order
 ```
 
 Migrations are one-shot: re-applying a file fails on "already exists" /
-duplicate column and changes no data. 003 is additive only; never drop the
-volume to re-run it.
+duplicate column and changes no data. 003 and 004 are additive only; never drop the
+volume to re-run them.
 
 ## API endpoints
 
@@ -89,9 +89,24 @@ volume to re-run it.
 | POST | /api/me/orders/:id/reissue-code | customer (owner) | revokes the current code (and any access it granted), returns a new `{code}`; 3/day. Only when the current code is active, redeemed by the buyer, or revoked for `customer_request`; otherwise `reissue_requires_admin` 403 (e.g. a gifted code redeemed by someone else, or an admin revoke) |
 | GET | /api/me/library | customer | `{books:[{bookId,title,coverUrl,orderId,purchasedAt,accessStatus}], pendingRedemptions:[{orderId,bookId,title,coverUrl,purchasedAt}]}` |
 | GET | /api/track/:trackingCode | none | hard-copy status `{orderNumber,bookTitle,status,label,updatedAt,courier?,trackingNumber?}`; never address, email or codes; 10/min per IP |
+| POST | /api/me/orders/:id/refund-request | customer (owner) | `{reason}` (trimmed, 1–500 chars) → 201 `{refund}`, or 200 with the existing open/refunded refund (never a duplicate). `refund` = `{id,orderId,status,reason,amount,createdAt,adminNote}` (`adminNote` only when `rejected`). 400 `validation_error` (`fields.reason`), 404 `not_found` (not yours), 409 `not_refundable` (order not paid) |
+| GET | /api/me/refunds | customer | caller's refunds (on their orders), newest first, same shape as above |
+| GET | /api/admin/refunds?status= | admin | newest 200 refunds `[{id,orderId,orderNumber,purchaseType,userId,status,reason,adminNote,amount,razorpayRefundId,requestedByUserId,reviewedByAdminId,createdAt,updatedAt}]`; bad `status` → 400 |
+| POST | /api/admin/refunds/:id/approve | admin | `{note?}` → `{refund}` `refunded` (gateway processed) or `processing` (finalised by the `refund.processed` webhook); idempotent once processing/refunded. 404, 409 `invalid_transition` (rejected) / `not_refundable` / `refund_conflict`, 502 `gateway_error` (refund left `failed`; approve again retries) |
+| POST | /api/admin/refunds/:id/reject | admin | `{note}` required (1–500) → `{refund}` `rejected`; 409 `invalid_transition` once processing/refunded |
+| POST | /api/admin/orders/:id/refund | admin | `{reason}` → 201 `{refund}` opened as `approved` and processed at once; 200 with the existing refund if one is open (an open customer request is approved). 404, 409 `not_refundable`, 502 `gateway_error` |
 
 Access codes are stored as HMAC-SHA256 (pepper from `CODE_SECRET`) plus last 4 chars; the plaintext is kept
 AES-256-GCM-encrypted (order id as AAD, so a blob copied to another order won't decrypt) only until redeemed. Rotating `CODE_SECRET` invalidates every unredeemed code.
+
+Refunds are full refunds only, for the captured `payments.amount` (never a client value). States:
+`requested` → `approved` → `processing` → `refunded`, or `rejected` / `failed`. One open refund per order is
+enforced by the database (`UNIQUE(order_id, is_open)`). The Razorpay call (`receipt` = `refund_<id>`) runs under
+a row lock on the refund, so two approvals can't both refund. On `refunded` (one transaction): payment and order
+`refunded`; digital: the order's current code `revoked` (reason `refund`) and its redeemer's `book_access.revoked_at`
+set; hard copy: fulfilment `cancelled` unless already shipped/out for delivery/delivered (then unchanged and an
+`refund.already_shipped` audit row); commission `pending`/`payable` → `reversed`, `paid` stays paid with
+`clawback_due=1`. A refunded order is never re-fulfilled. Every admin action writes `audit_logs` (`entity_type='refund'`).
 
 Common error shape: `{"error":{"code":"...","message":"...","fields"?:{...}}}`. Other codes seen across
 the API: `unauthorized` 401, `forbidden` 403 (wrong role), `not_found` 404, `validation_error` 400,
@@ -100,8 +115,10 @@ the API: `unauthorized` 401, `forbidden` 403 (wrong role), `not_found` 404, `val
 ### Razorpay webhook setup
 
 1. In the Razorpay dashboard (Settings > Webhooks) add a webhook with URL
-   `https://<your-domain>/api/webhooks/razorpay` and active events `payment.captured` and
-   `payment.failed` (other events are accepted and ignored).
+   `https://<your-domain>/api/webhooks/razorpay` and active events `payment.captured`,
+   `payment.failed` and `refund.processed` (other events are accepted and ignored). `refund.processed`
+   finalises our refund matched by refund id (or by payment id if the id was never stored) when the amount
+   is the full refund; anything else is `ignored` and logged (ids only).
 2. Enter a webhook secret there and set the same value as `RAZORPAY_WEBHOOK_SECRET` in `backend/.env`.
 3. Requests must carry `X-Razorpay-Signature` (HMAC-SHA256 of the raw body) and `X-Razorpay-Event-Id`
    (used for idempotency; a repeated id returns `duplicate`). A bad signature is 400 `invalid_signature`.
@@ -146,6 +163,6 @@ full test run:
 - `backend/tests/jwt_test.php` + `backend/tests/http_test.sh` — auth/health foundation
 - `backend/tests/upload_validator_test.php` + `backend/tests/book_test.sh` — book management (create → publish → cover/index/preview-pages/PDF uploads → public response shape/privacy → edit/unpublish/archive → role separation → invalid-file rejection)
 
-- `backend/tests/{money_pricing,address_validator,signature_gateway,order_fulfillment,codes,reconciler,race,middleware}_test.php` + `backend/tests/order_test.sh` — SP-5 orders, Razorpay, access codes, tracking, reconcile (run the PHP ones with `docker compose exec -T php php tests/<file>.php`)
+- `backend/tests/{money_pricing,address_validator,signature_gateway,order_fulfillment,codes,reconciler,race,middleware,refund}_test.php` + `backend/tests/order_test.sh` — SP-5 orders, Razorpay, access codes, tracking, reconcile, refunds (run the PHP ones with `docker compose exec -T php php tests/<file>.php`)
 
 Re-run any of them against a live `docker compose up` stack any time to re-verify.

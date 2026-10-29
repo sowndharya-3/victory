@@ -32,6 +32,19 @@ class RazorpayGateway implements Gateway
         return $this->request('GET', '/orders/' . rawurlencode($razorpayOrderId) . '/payments')['items'] ?? [];
     }
 
+    public function refund(string $razorpayPaymentId, int $amountPaise, string $receipt): array
+    {
+        $r = $this->request('POST', '/payments/' . rawurlencode($razorpayPaymentId) . '/refund', [
+            'amount' => $amountPaise,
+            'receipt' => $receipt,
+        ]);
+        if (!is_string($r['id'] ?? null) || !is_string($r['status'] ?? null)) {
+            error_log("Razorpay refund for {$razorpayPaymentId}: response without id/status");
+            throw new ApiException('Payment gateway error', 502, 'gateway_error');
+        }
+        return ['id' => $r['id'], 'status' => $r['status']];
+    }
+
     private function request(string $method, string $path, ?array $body = null): array
     {
         $ch = curl_init(self::BASE . $path);
@@ -44,7 +57,7 @@ class RazorpayGateway implements Gateway
             CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json'],
         ]);
         if ($body !== null) {
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body, JSON_THROW_ON_ERROR));
         }
         $response = curl_exec($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);

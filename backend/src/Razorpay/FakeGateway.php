@@ -45,4 +45,9 @@ class FakeGateway implements Gateway
     {
         return [];
     }
+
+    public function refund(string $razorpayPaymentId, int $amountPaise, string $receipt): array
+    {
+        return ['id' => 'rfnd_fake_' . bin2hex(random_bytes(6)), 'status' => 'processed'];
+    }
 }

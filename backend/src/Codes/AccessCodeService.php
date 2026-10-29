@@ -165,6 +165,22 @@ class AccessCodeService
         });
     }
 
+    /**
+     * Refund path: revokes the order's current code (and the access its redeemer got), reason 'refund'.
+     * Runs inside the caller's transaction with the orders row already locked (RefundService::finalise).
+     * Older codes need nothing: reissue always revoked them (and their access) before issuing the next.
+     */
+    public static function revokeForRefund(int $orderId, ?int $adminId): void
+    {
+        $stmt = Db::connection()->prepare('SELECT * FROM access_codes WHERE order_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE');
+        $stmt->execute([$orderId]);
+        $c = $stmt->fetch();
+        if ($c && $c['status'] !== 'revoked') {
+            self::revokeRow($c, 'refund');
+            self::audit($adminId, null, 'access_code.revoke', (int) $c['id'], ['orderId' => $orderId, 'reason' => 'refund']);
+        }
+    }
+
     private static function revokeRow(array $c, string $reason): void
     {
         $db = Db::connection();

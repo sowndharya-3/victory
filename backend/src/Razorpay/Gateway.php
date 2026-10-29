@@ -12,4 +12,7 @@ interface Gateway
 
     /** @return list<array> payment arrays */
     public function fetchOrderPayments(string $razorpayOrderId): array;
+
+    /** Full refund of a captured payment. @return array{id:string,status:string} status: processed|pending|failed */
+    public function refund(string $razorpayPaymentId, int $amountPaise, string $receipt): array;
 }

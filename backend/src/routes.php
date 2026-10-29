@@ -12,6 +12,8 @@ use App\Controllers\OrderController;
 use App\Controllers\WebhookController;
 use App\Controllers\AccessCodeController;
 use App\Controllers\TrackController;
+use App\Controllers\RefundController;
+use App\Controllers\AdminRefundController;
 
 $router->get('/api/health', [new HealthController(), 'check']);
 $router->post('/api/auth/register', [new AuthController(), 'register']);
@@ -49,3 +51,12 @@ $router->post('/api/me/orders/{id}/reissue-code', [$codes, 'reissue']);
 $router->post('/api/me/redeem', [$codes, 'redeem']);
 $router->get('/api/me/library', [$codes, 'library']);
 $router->get('/api/track/{code}', [new TrackController(), 'show']);
+
+$refunds = new RefundController();
+$router->post('/api/me/orders/{id}/refund-request', [$refunds, 'request']);
+$router->get('/api/me/refunds', [$refunds, 'mine']);
+$adminRefunds = new AdminRefundController();
+$router->get('/api/admin/refunds', [$adminRefunds, 'list']);
+$router->post('/api/admin/refunds/{id}/approve', [$adminRefunds, 'approve']);
+$router->post('/api/admin/refunds/{id}/reject', [$adminRefunds, 'reject']);
+$router->post('/api/admin/orders/{id}/refund', [$adminRefunds, 'open']);

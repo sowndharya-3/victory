@@ -115,6 +115,10 @@ try {
         {
             throw new \LogicException('unused');
         }
+        public function refund(string $razorpayPaymentId, int $amountPaise, string $receipt): array
+        {
+            throw new \LogicException('unused');
+        }
         public function fetchOrderPayments(string $razorpayOrderId): array
         {
             $this->calls[] = $razorpayOrderId;

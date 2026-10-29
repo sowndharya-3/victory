@@ -6,7 +6,10 @@ use App\Database\Db;
 use App\Http\ApiException;
 use App\Orders\OrderFulfillment;
 use App\Razorpay\Config;
+use App\Razorpay\GatewayFactory;
 use App\Razorpay\Signature;
+use App\Refunds\RefundService;
+use App\Support\Money;
 use PDOException;
 
 class WebhookController
@@ -52,6 +55,9 @@ class WebhookController
 
     private function handle(string $type, array $event): string
     {
+        if ($type === 'refund.processed') {
+            return $this->refundProcessed($event['payload']['refund']['entity'] ?? null);
+        }
         $entity = $event['payload']['payment']['entity'] ?? null;
         if (!in_array($type, ['payment.captured', 'payment.failed'], true)) {
             return 'ignored';
@@ -101,6 +107,37 @@ class WebhookController
         error_log("razorpay webhook: duplicate payment on paid order (razorpay_order_id={$rzpOrderId}, payment_id={$paymentId})");
         $db->prepare("UPDATE orders SET admin_flag = 'duplicate_payment' WHERE admin_flag IS NULL AND id = (SELECT order_id FROM payments WHERE razorpay_order_id = ?)")
             ->execute([$rzpOrderId]);
+    }
+
+    /** Matched by razorpay refund id, else by payment id (refund id never stored, e.g. a timed-out gateway call). */
+    private function refundProcessed(mixed $entity): string
+    {
+        $refundId = is_array($entity) && is_string($entity['id'] ?? null) ? $entity['id'] : '';
+        $paymentId = is_array($entity) && is_string($entity['payment_id'] ?? null) ? $entity['payment_id'] : '';
+        if ($refundId === '' || $paymentId === '' || strlen($refundId) > 100) {
+            return 'ignored';
+        }
+        $db = Db::connection();
+        $stmt = $db->prepare('SELECT r.id, r.amount FROM refunds r JOIN payments p ON p.id = r.payment_id WHERE r.razorpay_refund_id = ? AND p.razorpay_payment_id = ?');
+        $stmt->execute([$refundId, $paymentId]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            $stmt = $db->prepare("SELECT r.id, r.amount FROM refunds r JOIN payments p ON p.id = r.payment_id
+                                   WHERE p.razorpay_payment_id = ? AND r.razorpay_refund_id IS NULL AND r.status IN ('approved', 'processing', 'failed')
+                                   ORDER BY r.id DESC LIMIT 1");
+            $stmt->execute([$paymentId]);
+            $row = $stmt->fetch();
+        }
+        if (!$row) {
+            error_log("razorpay webhook: refund.processed for unknown refund (refund_id={$refundId}, payment_id={$paymentId})");
+            return 'ignored';
+        }
+        // Full refunds only: a different amount (e.g. a partial refund made in the dashboard) never finalises ours.
+        if (($entity['amount'] ?? null) !== Money::toPaise($row['amount'])) {
+            error_log("razorpay webhook: refund.processed amount differs from refund {$row['id']} (refund_id={$refundId}, payment_id={$paymentId})");
+            return 'ignored';
+        }
+        return (new RefundService(GatewayFactory::make()))->finalise((int) $row['id'], $refundId) ? 'ok' : 'ignored';
     }
 
     private function respond(string $status): void
