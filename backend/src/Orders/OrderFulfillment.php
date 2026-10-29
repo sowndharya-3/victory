@@ -2,9 +2,12 @@
 
 namespace App\Orders;
 
+use App\Codes\AccessCodeService;
+use App\Codes\CodeGenerator;
 use App\Database\Db;
 use App\Support\Money;
 use App\Support\Settings;
+use PDOException;
 
 /** The single paid/failed path: verify endpoint, webhook and any reconciliation all route through here. */
 class OrderFulfillment
@@ -36,11 +39,11 @@ class OrderFulfillment
 
             $type = $row['purchase_type'];
             if ($type === 'hardcopy') {
-                // Task 9: generate the tracking code here.
-                $db->prepare("UPDATE orders SET status = 'paid', paid_at = NOW(), fulfilment_status = 'confirmed' WHERE id = ?")->execute([$row['id']]);
+                self::markHardcopyPaid((int) $row['id']);
             } else {
                 $db->prepare("UPDATE orders SET status = 'paid', paid_at = NOW() WHERE id = ?")->execute([$row['id']]);
-                // Task 9: AccessCodeService::issueForOrder($row['id']) goes here (digital access is granted on code redemption).
+                // No book_access here: digital access is granted when the code is redeemed.
+                AccessCodeService::issueForOrder((int) $row['id']);
             }
 
             if ($row['referral_partner_id'] !== null) {
@@ -86,6 +89,23 @@ class OrderFulfillment
             }
             throw $e;
         }
+    }
+
+    /** Paid + confirmed + a unique tracking code (a UNIQUE collision fails only the statement, so retry in-transaction). */
+    private static function markHardcopyPaid(int $orderId): void
+    {
+        $stmt = Db::connection()->prepare("UPDATE orders SET status = 'paid', paid_at = NOW(), fulfilment_status = 'confirmed', tracking_code = ? WHERE id = ?");
+        for ($attempt = 0; $attempt < 5; $attempt++) {
+            try {
+                $stmt->execute([CodeGenerator::tracking(), $orderId]);
+                return;
+            } catch (PDOException $e) {
+                if ((string) $e->getCode() !== '23000' || !str_contains($e->getMessage(), 'tracking_code')) {
+                    throw $e;
+                }
+            }
+        }
+        throw new \RuntimeException('Could not allocate a unique tracking code');
     }
 
     /** Locks the order (and its payment) row; callers must be inside a transaction. */

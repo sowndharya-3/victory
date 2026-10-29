@@ -71,6 +71,15 @@ volume to re-run it.
 | DELETE | /api/admin/books/:id/preview-pages/:pageNumber | admin | removes that page's file and row, `{deleted: true}` |
 | POST | /api/admin/books/:id/pdf | admin | multipart `file` (PDF, max 50MB) → stores privately under `backend/storage/`, never publicly servable |
 
+| GET | /api/me/orders/:id/access-code | customer | `{code}` (`XXXX-XXXX-XXXX-XXXX`) while the paid digital order's code is unredeemed; else 404 |
+| POST | /api/me/redeem | customer | `{code}` → `{bookId, orderId}`; the only way digital access is granted. Errors `code_invalid` 400, `code_revoked`/`code_order_not_paid` 403, `code_already_redeemed`/`already_owned` 409. Failed attempts limited to 5/15 min per user, 20/15 min per IP (429) |
+| POST | /api/me/orders/:id/reissue-code | customer (owner) | revokes the current code (and any access it granted), returns a new `{code}`; 3/day |
+| GET | /api/me/library | customer | `{books:[{bookId,title,coverUrl,orderId,purchasedAt,accessStatus}], pendingRedemptions:[{orderId,bookId,title,coverUrl,purchasedAt}]}` |
+| GET | /api/track/:trackingCode | none | hard-copy status `{orderNumber,bookTitle,status,label,updatedAt,courier?,trackingNumber?}`; never address, email or codes; 10/min per IP |
+
+Access codes are stored as HMAC-SHA256 (pepper from `CODE_SECRET`) plus last 4 chars; the plaintext is kept
+AES-256-GCM-encrypted only until redeemed. Rotating `CODE_SECRET` invalidates every unredeemed code.
+
 ### Creating the first admin
 
 No admin-creation endpoint exists yet (that's a later sub-project). Seed

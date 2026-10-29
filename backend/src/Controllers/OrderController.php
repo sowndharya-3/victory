@@ -84,7 +84,7 @@ class OrderController
     public function mine(): void
     {
         $payload = AuthMiddleware::requireRole(['customer']);
-        $stmt = Db::connection()->prepare('SELECT o.*, b.title AS book_title FROM orders o JOIN books b ON b.id = o.book_id WHERE o.user_id = ? ORDER BY o.id DESC');
+        $stmt = Db::connection()->prepare(OrderFormatter::SELECT . ' WHERE o.user_id = ? ORDER BY o.id DESC');
         $stmt->execute([(int) $payload['sub']]);
         echo json_encode(array_map(fn ($o) => OrderFormatter::format($o), $stmt->fetchAll()));
     }
@@ -99,7 +99,7 @@ class OrderController
     private function load(int $id, int $userId): array
     {
         $db = Db::connection();
-        $stmt = $db->prepare('SELECT o.*, b.title AS book_title FROM orders o JOIN books b ON b.id = o.book_id WHERE o.id = ? AND o.user_id = ?');
+        $stmt = $db->prepare(OrderFormatter::SELECT . ' WHERE o.id = ? AND o.user_id = ?');
         $stmt->execute([$id, $userId]);
         $row = $stmt->fetch();
         if (!$row) {

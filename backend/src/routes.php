@@ -10,6 +10,8 @@ use App\Controllers\CheckoutController;
 use App\Controllers\ReferralController;
 use App\Controllers\OrderController;
 use App\Controllers\WebhookController;
+use App\Controllers\AccessCodeController;
+use App\Controllers\TrackController;
 
 $router->get('/api/health', [new HealthController(), 'check']);
 $router->post('/api/auth/register', [new AuthController(), 'register']);
@@ -40,3 +42,10 @@ $router->post('/api/orders/{id}/verify', [new OrderController(), 'verify']);
 $router->get('/api/me/orders', [new OrderController(), 'mine']);
 $router->get('/api/me/orders/{id}', [new OrderController(), 'showMine']);
 $router->post('/api/webhooks/razorpay', [new WebhookController(), 'razorpay']);
+
+$codes = new AccessCodeController();
+$router->get('/api/me/orders/{id}/access-code', [$codes, 'reveal']);
+$router->post('/api/me/orders/{id}/reissue-code', [$codes, 'reissue']);
+$router->post('/api/me/redeem', [$codes, 'redeem']);
+$router->get('/api/me/library', [$codes, 'library']);
+$router->get('/api/track/{code}', [new TrackController(), 'show']);

@@ -10,14 +10,37 @@ class RateLimiter
 {
     public static function hit(string $bucket, int $max, int $windowSeconds): void
     {
-        $db = Db::connection();
-        $window = date('Y-m-d H:i:s', intdiv(time(), $windowSeconds) * $windowSeconds);
-        $db->prepare('INSERT INTO rate_limits (bucket, window_start, hits) VALUES (?, ?, 1) ON DUPLICATE KEY UPDATE hits = hits + 1')
-            ->execute([$bucket, $window]);
-        $read = $db->prepare('SELECT hits FROM rate_limits WHERE bucket = ? AND window_start = ?');
-        $read->execute([$bucket, $window]);
-        if ((int) $read->fetchColumn() > $max) {
+        self::record($bucket, $windowSeconds);
+        if (self::hits($bucket, $windowSeconds) > $max) {
             throw new ApiException('Too many requests', 429, 'rate_limited');
         }
+    }
+
+    /**
+     * Failure-only limits: hit() before the attempt (atomic, so parallel guesses can't overshoot),
+     * then release() the slot when the attempt succeeded.
+     */
+    public static function release(string $bucket, int $windowSeconds): void
+    {
+        Db::connection()->prepare('UPDATE rate_limits SET hits = GREATEST(hits - 1, 0) WHERE bucket = ? AND window_start = ?')
+            ->execute([$bucket, self::window($windowSeconds)]);
+    }
+
+    private static function record(string $bucket, int $windowSeconds): void
+    {
+        Db::connection()->prepare('INSERT INTO rate_limits (bucket, window_start, hits) VALUES (?, ?, 1) ON DUPLICATE KEY UPDATE hits = hits + 1')
+            ->execute([$bucket, self::window($windowSeconds)]);
+    }
+
+    private static function hits(string $bucket, int $windowSeconds): int
+    {
+        $read = Db::connection()->prepare('SELECT hits FROM rate_limits WHERE bucket = ? AND window_start = ?');
+        $read->execute([$bucket, self::window($windowSeconds)]);
+        return (int) $read->fetchColumn();
+    }
+
+    private static function window(int $windowSeconds): string
+    {
+        return date('Y-m-d H:i:s', intdiv(time(), $windowSeconds) * $windowSeconds);
     }
 }

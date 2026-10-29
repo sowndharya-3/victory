@@ -100,12 +100,13 @@ try {
     check('order status paid', status($o['id']) === 'paid');
     check('paid_at set', val('SELECT paid_at FROM orders WHERE id = ?', [$o['id']]) !== null);
     check('digital: NO book_access row (granted by redemption)', accessCount($o['uid']) === 0);
+    check('digital: exactly one active access code', (int) val("SELECT COUNT(*) FROM access_codes WHERE order_id = ? AND status = 'active'", [$o['id']]) === 1);
     $pay = q('SELECT status, razorpay_payment_id, raw_response FROM payments WHERE order_id = ?', [$o['id']])->fetch();
     check('payment captured with id and raw_response', $pay['status'] === 'captured' && $pay['razorpay_payment_id'] === 'pay_' . $tag . 'a' && json_decode($pay['raw_response'], true) === ['id' => 'pay_x']);
     $c = q('SELECT amount, status, purchase_type FROM commissions WHERE order_id = ?', [$o['id']])->fetch();
     check('referral commission 25.00 pending', $c && $c['amount'] === '25.00' && $c['status'] === 'pending' && $c['purchase_type'] === 'digital');
     check('second markPaid returns already_paid', OrderFulfillment::markPaid($o['rzp'], 'pay_' . $tag . 'a', 49900) === 'already_paid');
-    check('still exactly one commission', commissions($o['id']) === 1);
+    check('still exactly one commission and one code', commissions($o['id']) === 1 && (int) val('SELECT COUNT(*) FROM access_codes WHERE order_id = ?', [$o['id']]) === 1);
 
     // no partner
     $o2 = mkOrder('digital', null);
@@ -117,7 +118,8 @@ try {
     OrderFulfillment::markPaid($h['rzp'], 'pay_' . $tag . 'c', 49900);
     check('hardcopy => fulfilment confirmed', val('SELECT fulfilment_status FROM orders WHERE id = ?', [$h['id']]) === 'confirmed');
     check('hardcopy => no book_access', accessCount($h['uid']) === 0);
-    check('hardcopy => tracking_code not generated here', val('SELECT tracking_code FROM orders WHERE id = ?', [$h['id']]) === null);
+    check('hardcopy => tracking_code VTT-XXXXXXXX', preg_match('/^VTT-[0-9A-HJKMNP-TV-Z]{8}$/', (string) val('SELECT tracking_code FROM orders WHERE id = ?', [$h['id']])) === 1);
+    check('hardcopy => no access code', (int) val('SELECT COUNT(*) FROM access_codes WHERE order_id = ?', [$h['id']]) === 0);
 
     // rate-change snapshot
     q("UPDATE settings SET `value` = '40' WHERE `key` = 'commission_rate_hardcopy'");
@@ -193,6 +195,7 @@ try {
     $ids = $userIds ? implode(',', array_map('intval', $userIds)) : '0';
     $orderIds = "SELECT id FROM orders WHERE user_id IN ($ids)";
     $db->exec("DELETE FROM commissions WHERE order_id IN ($orderIds)");
+    $db->exec("DELETE FROM access_codes WHERE order_id IN ($orderIds)");
     $db->exec("DELETE FROM book_access WHERE user_id IN ($ids)");
     $db->exec("DELETE FROM payments WHERE order_id IN ($orderIds)");
     $db->exec("DELETE FROM orders WHERE user_id IN ($ids)");

@@ -122,7 +122,7 @@ class OrderService
                 throw $e;
             }
 
-            $stmt = $db->prepare('SELECT o.*, b.title AS book_title FROM orders o JOIN books b ON b.id = o.book_id WHERE o.id = ?');
+            $stmt = $db->prepare(OrderFormatter::SELECT . ' WHERE o.id = ?');
             $stmt->execute([$orderId]);
             $row = $stmt->fetch();
             $addrRow = null;

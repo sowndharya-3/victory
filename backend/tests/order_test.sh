@@ -34,10 +34,12 @@ fi
 cleanup() {
   # Always restore settings and remove fixtures, even on failure.
   sql "UPDATE settings SET \`value\`='0' WHERE \`key\`='gst_percent_digital'; UPDATE settings SET \`value\`='inclusive' WHERE \`key\`='gst_mode';
-       DELETE FROM rate_limits WHERE bucket LIKE 'referral-validate:%';
+       DELETE FROM rate_limits WHERE bucket LIKE 'referral-validate:%' OR bucket LIKE 'code-redeem-%' OR bucket LIKE 'code-reissue:%' OR bucket LIKE 'track:%';
        DELETE FROM payment_events WHERE event_id LIKE 'evt_ordertest_%';"
   if [ -n "$BOOK_ID" ]; then
-    sql "DELETE FROM commissions WHERE order_id IN (SELECT id FROM orders WHERE book_id=$BOOK_ID);
+    sql "DELETE FROM audit_logs WHERE entity_type='access_code' AND entity_id IN (SELECT id FROM access_codes WHERE book_id=$BOOK_ID);
+         DELETE FROM access_codes WHERE book_id=$BOOK_ID;
+         DELETE FROM commissions WHERE order_id IN (SELECT id FROM orders WHERE book_id=$BOOK_ID);
          DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE book_id=$BOOK_ID);
          DELETE FROM hardcopy_addresses WHERE order_id IN (SELECT id FROM orders WHERE book_id=$BOOK_ID);
          DELETE FROM book_access WHERE book_id=$BOOK_ID;
@@ -380,6 +382,93 @@ check "pre-existing unprocessed event row: reprocessed -> order paid, processed_
 # Hard copy via webhook
 wh "${EV}_h1" "$(cap_body "$WRH" "pay_wh_h" 34900)"
 check "hardcopy captured webhook -> paid, fulfilment confirmed" "$([ "$WCODE" = "200" ] && [ "$(sql "SELECT CONCAT(status,'|',fulfilment_status) FROM orders WHERE id=$WH")" = "paid|confirmed" ] && echo true || echo false)"
+check "webhook-paid digital order has one active access code, hardcopy has none" "$([ "$(sql "SELECT COUNT(*) FROM access_codes WHERE order_id=$W1 AND status='active'")" = "1" ] && [ "$(sql "SELECT COUNT(*) FROM access_codes WHERE order_id=$WH")" = "0" ] && echo true || echo false)"
+
+echo "=== 6. Access codes, library, tracking ==="
+post_json() { # $1 token $2 path $3 json -> PCODE, P
+  PCODE=$(curl -s -o "$TMP/p.json" -w '%{http_code}' -X POST "$BASE_URL$2" -H "Content-Type: application/json" ${1:+-H "Authorization: Bearer $1"} -d "$3"); P=$(cat "$TMP/p.json")
+}
+code_of() { echo "$1" | grep -o '"code":"[^"]*"' | cut -d'"' -f4; }
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'code-redeem-%' OR bucket LIKE 'code-reissue:%' OR bucket LIKE 'track:%';"
+read -r TOKEN_F UID_F <<<"$(register "ordertest-f-$STAMP@example.com")"
+read -r TOKEN_G UID_G <<<"$(register "ordertest-g-$STAMP@example.com")"
+read -r TOKEN_H UID_H <<<"$(register "ordertest-h-$STAMP@example.com")"
+new_order "$TOKEN_F" "$DIG"; CF=$NID; CRF=$NRZP
+PF="pay_fake_${CRF}_captured"
+verify "$TOKEN_F" "$CF" "$CRF" "$PF" "$(sign "$CRF" "$PF")"
+check "section 6: digital order paid via verify" "$([ "$VCODE" = "200" ] && [ -n "$UID_H" ] && jh "$V" '"digitalCode":\{"status":"active","last4":"[0-9A-Z]{4}"\}' && echo true || echo false)"
+
+get_json "$TOKEN_F" "/api/me/orders/$CF/access-code"
+DCODE=$(code_of "$G")
+check "owner reveals access code XXXX-XXXX-XXXX-XXXX" "$([ "$GCODE" = "200" ] && echo "$DCODE" | grep -Eq '^([0-9A-HJKMNP-TV-Z]{4}-){3}[0-9A-HJKMNP-TV-Z]{4}$' && echo true || echo false)"
+get_json "$TOKEN_F" "/api/me/orders/$CF"
+check "order view: digitalCode last4 only, never plaintext; trackingCode null" "$(jh "$G" "\"last4\":\"${DCODE: -4}\"" && ! echo "$G" | grep -q "${DCODE:0:9}" && jh "$G" '"trackingCode":null' && echo true || echo false)"
+get_json "$TOKEN_G" "/api/me/orders/$CF/access-code"
+check "other user revealing F's code -> 404" "$([ "$GCODE" = "404" ] && echo true || echo false)"
+get_json "" "/api/me/orders/$CF/access-code"
+check "reveal without token -> 401" "$([ "$GCODE" = "401" ] && echo true || echo false)"
+
+get_json "$TOKEN_F" "/api/me/library"
+check "library: order pending redemption, no books, no book_access row" "$([ "$GCODE" = "200" ] && jh "$G" '^\{"books":\[\],"pendingRedemptions":\[\{"orderId":'"$CF"',"bookId":'"$BOOK_ID"',"title":"Order Test Book"' && [ "$(sql "SELECT COUNT(*) FROM book_access WHERE user_id=$UID_F")" = "0" ] && echo true || echo false)"
+
+post_json "$TOKEN_F" "/api/me/redeem" "{\"code\":\"$(echo "$DCODE" | tr 'A-Z' 'a-z')\"}"
+check "owner redeems (lowercase) -> 200 {bookId, orderId}" "$([ "$PCODE" = "200" ] && jh "$P" "^\{\"bookId\":$BOOK_ID,\"orderId\":$CF\}$" && echo true || echo false)"
+get_json "$TOKEN_F" "/api/me/library"
+check "library now lists the book active, nothing pending" "$(jh "$G" '^\{"books":\[\{"bookId":'"$BOOK_ID"',"title":"Order Test Book","coverUrl":null,"orderId":'"$CF"',"purchasedAt":"[0-9].*"accessStatus":"active"\}\],"pendingRedemptions":\[\]\}$' && echo true || echo false)"
+check "code_enc cleared after redemption" "$([ "$(sql "SELECT code_enc IS NULL FROM access_codes WHERE order_id=$CF")" = "1" ] && echo true || echo false)"
+get_json "$TOKEN_F" "/api/me/orders/$CF/access-code"
+check "reveal after redemption -> 404" "$([ "$GCODE" = "404" ] && echo true || echo false)"
+post_json "$TOKEN_F" "/api/me/redeem" "{\"code\":\"$DCODE\"}"
+check "owner redeems again -> 200 idempotent" "$([ "$PCODE" = "200" ] && echo true || echo false)"
+check "successful redeems leave no rate-limit hits" "$([ "$(sql "SELECT COALESCE(SUM(hits),0) FROM rate_limits WHERE bucket='code-redeem-user:$UID_F'")" = "0" ] && echo true || echo false)"
+post_json "$TOKEN_G" "/api/me/redeem" "{\"code\":\"$DCODE\"}"
+check "second user redeems same code -> 409 code_already_redeemed, no access" "$([ "$PCODE" = "409" ] && jh "$P" '"code":"code_already_redeemed"' && [ "$(sql "SELECT COUNT(*) FROM book_access WHERE user_id=$UID_G")" = "0" ] && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/me/redeem" "{\"code\":\"$DCODE\"}"
+check "admin token on redeem -> 403" "$([ "$PCODE" = "403" ] && echo true || echo false)"
+
+CODES=""
+for i in 1 2 3 4 5 6; do
+  post_json "$TOKEN_H" "/api/me/redeem" '{"code":"AAAA-BBBB-CCCC-DDDD"}'
+  CODES="$CODES $PCODE"
+done
+check "5 wrong guesses -> 400 code_invalid, 6th -> 429" "$([ "$CODES" = " 400 400 400 400 400 429" ] && jh "$P" '"code":"rate_limited"' && echo true || echo false)"
+post_json "$TOKEN_H" "/api/me/redeem" '{}'
+check "rate-limited user stays limited (even malformed body)" "$([ "$PCODE" = "429" ] && echo true || echo false)"
+
+# Reissue: owner only, revokes the redeemed code and its access
+post_json "$TOKEN_G" "/api/me/orders/$CF/reissue-code" '{}'
+check "other user reissuing F's code -> 404" "$([ "$PCODE" = "404" ] && echo true || echo false)"
+post_json "$TOKEN_F" "/api/me/orders/$CF/reissue-code" '{}'
+NCODE=$(code_of "$P")
+check "owner reissue -> 200 new code" "$([ "$PCODE" = "200" ] && [ -n "$NCODE" ] && [ "$NCODE" != "$DCODE" ] && echo true || echo false)"
+post_json "$TOKEN_F" "/api/me/redeem" "{\"code\":\"$DCODE\"}"
+check "old code after reissue -> 403 code_revoked" "$([ "$PCODE" = "403" ] && jh "$P" '"code":"code_revoked"' && echo true || echo false)"
+get_json "$TOKEN_F" "/api/me/library"
+check "library: book revoked, order pending again" "$(jh "$G" '"accessStatus":"revoked"' && jh "$G" '"pendingRedemptions":\[\{"orderId":'"$CF" && echo true || echo false)"
+check "reissue audit row: user_id set, admin_id NULL" "$([ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE action='access_code.reissue' AND user_id=$UID_F AND admin_id IS NULL")" = "1" ] && echo true || echo false)"
+post_json "$TOKEN_F" "/api/me/orders/$CF/reissue-code" '{}'; R2C=$PCODE
+post_json "$TOKEN_F" "/api/me/orders/$CF/reissue-code" '{}'; R3C=$PCODE
+post_json "$TOKEN_F" "/api/me/orders/$CF/reissue-code" '{}'
+check "reissue 3/day: 2nd and 3rd ok, 4th -> 429" "$([ "$R2C" = "200" ] && [ "$R3C" = "200" ] && [ "$PCODE" = "429" ] && echo true || echo false)"
+check "audit log never stores a plaintext code" "$([ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE CAST(detail AS CHAR) LIKE '%${NCODE:0:4}%${NCODE:5:4}%' OR CAST(detail AS CHAR) LIKE '%${DCODE:0:4}%${DCODE:5:4}%'")" = "0" ] && echo true || echo false)"
+
+# Hard copy: tracking code, public lookup, separate from digital access
+new_order "$TOKEN_F" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"hardcopy\",\"address\":$ADDR}"; TH=$NID; TRH=$NRZP
+PTH="pay_fake_${TRH}_captured"
+verify "$TOKEN_F" "$TH" "$TRH" "$PTH" "$(sign "$TRH" "$PTH")"
+TCODE=$(echo "$V" | grep -o '"trackingCode":"[^"]*"' | cut -d'"' -f4)
+check "hardcopy owner sees trackingCode VTT-XXXXXXXX, digitalCode null" "$(echo "$TCODE" | grep -Eq '^VTT-[0-9A-HJKMNP-TV-Z]{8}$' && jh "$V" '"digitalCode":null' && echo true || echo false)"
+get_json "" "/api/track/$TCODE"
+check "GET /api/track/{code} -> 200 confirmed with label" "$([ "$GCODE" = "200" ] && jh "$G" '^\{"orderNumber":"VT-[0-9]{8}-[0-9A-Z]{6}","bookTitle":"Order Test Book","status":"confirmed","label":"Order Confirmed","updatedAt":"[0-9]' && echo true || echo false)"
+check "track response has no address, email or code keys" "$(! echo "$G" | grep -Eqi '"(address|email|fullName|phone|pincode|code|digitalCode|trackingCode)"' && echo true || echo false)"
+get_json "" "/api/track/$(echo "$TCODE" | tr 'A-Z' 'a-z')"
+check "track lookup is case-insensitive" "$([ "$GCODE" = "200" ] && echo true || echo false)"
+post_json "$TOKEN_F" "/api/me/redeem" "{\"code\":\"$TCODE\"}"
+check "tracking code on /api/me/redeem -> 400 code_invalid" "$([ "$PCODE" = "400" ] && jh "$P" '"code":"code_invalid"' && echo true || echo false)"
+get_json "$TOKEN_F" "/api/me/orders/$TH/access-code"
+check "hardcopy order has no access code -> 404" "$([ "$GCODE" = "404" ] && echo true || echo false)"
+get_json "" "/api/track/VTT-00000000"
+check "unknown tracking code -> 404 not_found" "$([ "$GCODE" = "404" ] && jh "$G" '"code":"not_found"' && echo true || echo false)"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
