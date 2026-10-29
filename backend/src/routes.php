@@ -9,6 +9,7 @@ use App\Controllers\AdminBookController;
 use App\Controllers\CheckoutController;
 use App\Controllers\ReferralController;
 use App\Controllers\OrderController;
+use App\Controllers\WebhookController;
 
 $router->get('/api/health', [new HealthController(), 'check']);
 $router->post('/api/auth/register', [new AuthController(), 'register']);
@@ -38,3 +39,4 @@ $router->post('/api/orders', [new OrderController(), 'create']);
 $router->post('/api/orders/{id}/verify', [new OrderController(), 'verify']);
 $router->get('/api/me/orders', [new OrderController(), 'mine']);
 $router->get('/api/me/orders/{id}', [new OrderController(), 'showMine']);
+$router->post('/api/webhooks/razorpay', [new WebhookController(), 'razorpay']);

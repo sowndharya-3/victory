@@ -22,20 +22,31 @@ json_has() { echo "$1" | grep -Eq "$2" && echo true || echo false; }
 TMP="${TMPDIR:-/tmp}"
 BOOK_ID=""
 
+# Secrets come from backend/.env; never echo their values.
+ENV_FILE="$(dirname "$0")/../.env"
+RZP_SECRET=$(grep '^RAZORPAY_KEY_SECRET=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '\r')
+WH_SECRET=$(grep '^RAZORPAY_WEBHOOK_SECRET=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '\r')
+if [ -z "$RZP_SECRET" ] || [ -z "$WH_SECRET" ]; then
+  echo "ERROR: RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET must both be set in backend/.env" >&2
+  exit 2
+fi
+
 cleanup() {
   # Always restore settings and remove fixtures, even on failure.
   sql "UPDATE settings SET \`value\`='0' WHERE \`key\`='gst_percent_digital'; UPDATE settings SET \`value\`='inclusive' WHERE \`key\`='gst_mode';
-       DELETE FROM referral_partners WHERE referral_code IN ('VTP-TEST01','VTP-TEST02');
-       DELETE FROM rate_limits WHERE bucket LIKE 'referral-validate:%';"
+       DELETE FROM rate_limits WHERE bucket LIKE 'referral-validate:%';
+       DELETE FROM payment_events WHERE event_id LIKE 'evt_ordertest_%';"
   if [ -n "$BOOK_ID" ]; then
-    sql "DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE book_id=$BOOK_ID);
+    sql "DELETE FROM commissions WHERE order_id IN (SELECT id FROM orders WHERE book_id=$BOOK_ID);
+         DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE book_id=$BOOK_ID);
          DELETE FROM hardcopy_addresses WHERE order_id IN (SELECT id FROM orders WHERE book_id=$BOOK_ID);
          DELETE FROM book_access WHERE book_id=$BOOK_ID;
          DELETE FROM orders WHERE book_id=$BOOK_ID;
          DELETE FROM book_preview_pages WHERE book_id=$BOOK_ID; DELETE FROM books WHERE id=$BOOK_ID;"
   fi
   sql "DELETE FROM rate_limits WHERE bucket LIKE 'order-create:%' AND SUBSTRING_INDEX(bucket,':',-1) IN (SELECT id FROM users WHERE email LIKE 'ordertest-%@example.com');
-       DELETE FROM users WHERE email LIKE 'ordertest-%@example.com';"
+       DELETE FROM users WHERE email LIKE 'ordertest-%@example.com';
+       DELETE FROM referral_partners WHERE referral_code IN ('VTP-TEST01','VTP-TEST02');"
 }
 trap cleanup EXIT
 
@@ -189,7 +200,6 @@ check "20 creates in an hour -> 201 each" "$([ "$(echo $CODES | cut -d' ' -f1-20
 check "21st create in an hour -> 429" "$([ "$OCODE" = "429" ] && echo true || echo false)"
 
 echo "=== 4. Verify payment and customer order APIs ==="
-RZP_SECRET=$(grep '^RAZORPAY_KEY_SECRET=' "$(dirname "$0")/../.env" | cut -d= -f2- | tr -d '\r')
 sign() { printf '%s|%s' "$1" "$2" | openssl dgst -sha256 -hmac "$RZP_SECRET" -hex | awk '{print $NF}'; }
 verify() { # $1 token $2 order id $3 rzp order id $4 payment id $5 signature -> VCODE, V
   VCODE=$(curl -s -o "$TMP/v.json" -w '%{http_code}' -X POST "$BASE_URL/api/orders/$2/verify" -H "Content-Type: application/json" ${1:+-H "Authorization: Bearer $1"} \
@@ -277,6 +287,99 @@ get_json "$TOKEN_D" "/api/me/orders/$O1"
 check "GET /api/me/orders/{C's} as D -> 404" "$([ "$GCODE" = "404" ] && echo true || echo false)"
 get_json "$TOKEN_C" "/api/me/orders/99999999"
 check "GET /api/me/orders/{missing} -> 404" "$([ "$GCODE" = "404" ] && echo true || echo false)"
+
+# Task 7 review gaps: role and body-shape guards
+verify "$ADMIN_TOKEN" "$O5" "$R5" "$P5" "x"
+check "admin token on verify -> 403" "$([ "$VCODE" = "403" ] && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/me/orders"
+check "admin token on GET /api/me/orders -> 403" "$([ "$GCODE" = "403" ] && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/me/orders/$O1"
+check "admin token on GET /api/me/orders/{id} -> 403" "$([ "$GCODE" = "403" ] && echo true || echo false)"
+VCODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/orders/$O5/verify" -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN_C" \
+  -d '{"razorpay_order_id":["x"],"razorpay_payment_id":1,"razorpay_signature":null}')
+check "verify with non-string JSON fields -> 400" "$([ "$VCODE" = "400" ] && echo true || echo false)"
+
+echo "=== 5. Razorpay webhook ==="
+hmac() { printf '%s' "$1" | openssl dgst -sha256 -hmac "$WH_SECRET" -hex | awk '{print $NF}'; }
+wh() { # $1 event id ("" omits header) $2 raw body [$3 signature override; "none" omits the header] -> WCODE, W
+  local sig="${3:-$(hmac "$2")}" args=()
+  [ -n "$1" ] && args+=(-H "X-Razorpay-Event-Id: $1")
+  [ "$sig" != "none" ] && args+=(-H "X-Razorpay-Signature: $sig")
+  WCODE=$(curl -s -o "$TMP/w.json" -w '%{http_code}' -X POST "$BASE_URL/api/webhooks/razorpay" -H "Content-Type: application/json" "${args[@]}" --data-binary "$2")
+  W=$(cat "$TMP/w.json")
+}
+cap_body() { echo "{\"event\":\"payment.captured\",\"payload\":{\"payment\":{\"entity\":{\"id\":\"$2\",\"order_id\":\"$1\",\"amount\":$3,\"status\":\"captured\"}}}}"; }
+fail_body() { echo "{\"event\":\"payment.failed\",\"payload\":{\"payment\":{\"entity\":{\"id\":\"$2\",\"order_id\":\"$1\",\"amount\":19900,\"status\":\"failed\",\"error_description\":\"card declined\"}}}}"; }
+processed() { sql "SELECT processed_at IS NOT NULL FROM payment_events WHERE event_id='$1'"; }
+commissions_of() { sql "SELECT COUNT(*) FROM commissions WHERE order_id=$1"; }
+EV="evt_ordertest_$STAMP"
+REFUND_BODY='{"event":"refund.processed","payload":{"refund":{"entity":{"id":"rfnd_1","payment_id":"pay_x"}}}}'
+
+read -r TOKEN_E UID_E <<<"$(register "ordertest-e-$STAMP@example.com")"
+sql "DELETE FROM rate_limits WHERE bucket='order-create:$UID_E';"
+new_order "$TOKEN_E" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\",\"referralCode\":\"VTP-TEST01\"}"; W1=$NID; WR1=$NRZP
+new_order "$TOKEN_E" "$DIG"; W2=$NID; WR2=$NRZP
+new_order "$TOKEN_E" "$DIG"; W3=$NID; WR3=$NRZP
+new_order "$TOKEN_E" "$DIG"; W4=$NID; WR4=$NRZP
+new_order "$TOKEN_E" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"hardcopy\",\"address\":$ADDR}"; WH=$NID; WRH=$NRZP
+check "section 5 fixtures created" "$([ -n "$W1" ] && [ -n "$W4" ] && [ -n "$WH" ] && [ -n "$WR1" ] && [ -n "$WRH" ] && [ "$(sql "SELECT referral_partner_id IS NOT NULL FROM orders WHERE id=$W1")" = "1" ] && echo true || echo false)"
+
+# Rejections write nothing
+B1=$(cap_body "$WR1" "pay_wh_1" 19900)
+wh "${EV}_bad" "$B1" "deadbeef"
+check "bad signature -> 400 invalid_signature" "$([ "$WCODE" = "400" ] && jh "$W" '"code":"invalid_signature"' && echo true || echo false)"
+wh "${EV}_nosig" "$B1" "none"
+check "missing signature -> 400 invalid_signature" "$([ "$WCODE" = "400" ] && jh "$W" '"code":"invalid_signature"' && echo true || echo false)"
+wh "${EV}_tamper" "$(cap_body "$WR1" "pay_wh_1" 1)" "$(hmac "$B1")"
+check "signature over a different body -> 400" "$([ "$WCODE" = "400" ] && echo true || echo false)"
+wh "" "$B1"
+check "missing event id (valid signature) -> 400 validation_error" "$([ "$WCODE" = "400" ] && jh "$W" '"code":"validation_error"' && echo true || echo false)"
+wh "${EV}_junk" "not json"
+check "invalid JSON (valid signature) -> 400" "$([ "$WCODE" = "400" ] && echo true || echo false)"
+check "rejected webhooks: order still pending, nothing recorded" "$([ "$(order_status $W1)" = "pending" ] && [ "$(sql "SELECT COUNT(*) FROM payment_events WHERE event_id LIKE '${EV}_%'")" = "0" ] && echo true || echo false)"
+
+# Captured WITHOUT a prior verify call (referral order)
+wh "${EV}_c1" "$B1"
+check "captured webhook -> 200 ok" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ok"' && echo true || echo false)"
+check "order paid, payment captured with webhook payment id, no book_access" "$([ "$(order_status $W1)" = "paid" ] && [ "$(sql "SELECT CONCAT(status,'|',razorpay_payment_id) FROM payments WHERE order_id=$W1")" = "captured|pay_wh_1" ] && [ "$(sql "SELECT COUNT(*) FROM book_access WHERE user_id=$UID_E AND book_id=$BOOK_ID")" = "0" ] && echo true || echo false)"
+check "referral order has exactly one commission; event marked processed" "$([ "$(commissions_of $W1)" = "1" ] && [ "$(processed ${EV}_c1)" = "1" ] && echo true || echo false)"
+wh "${EV}_c1" "$B1"
+check "same event id replayed -> 200 duplicate, still one commission" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"duplicate"' && [ "$(commissions_of $W1)" = "1" ] && echo true || echo false)"
+wh "${EV}_c1b" "$B1"
+check "different event id, same payment -> 200 ok, one commission, no flag" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ok"' && [ "$(commissions_of $W1)" = "1" ] && [ "$(sql "SELECT admin_flag IS NULL FROM orders WHERE id=$W1")" = "1" ] && echo true || echo false)"
+wh "${EV}_c1c" "$(cap_body "$WR1" "pay_wh_other" 19900)"
+check "second capture with another payment id -> admin_flag duplicate_payment, original payment kept" "$([ "$WCODE" = "200" ] && [ "$(sql "SELECT admin_flag FROM orders WHERE id=$W1")" = "duplicate_payment" ] && [ "$(sql "SELECT razorpay_payment_id FROM payments WHERE order_id=$W1")" = "pay_wh_1" ] && [ "$(commissions_of $W1)" = "1" ] && echo true || echo false)"
+
+# Failed
+wh "${EV}_f2" "$(fail_body "$WR2" "pay_wh_2")"
+check "payment.failed for pending order -> 200, order failed with reason" "$([ "$WCODE" = "200" ] && [ "$(order_status $W2)" = "failed" ] && [ "$(sql "SELECT failure_reason FROM payments WHERE order_id=$W2")" = "card declined" ] && echo true || echo false)"
+wh "${EV}_f1" "$(fail_body "$WR1" "pay_wh_late")"
+check "payment.failed after capture -> 200, order stays paid" "$([ "$WCODE" = "200" ] && [ "$(order_status $W1)" = "paid" ] && echo true || echo false)"
+
+# Amount mismatch
+wh "${EV}_m3" "$(cap_body "$WR3" "pay_wh_3" 100)"
+check "amount mismatch -> 200 flagged" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"flagged"' && echo true || echo false)"
+check "mismatch: order pending, admin_flag amount_mismatch, event processed" "$([ "$(order_status $W3)" = "pending" ] && [ "$(sql "SELECT admin_flag FROM orders WHERE id=$W3")" = "amount_mismatch" ] && [ "$(processed ${EV}_m3)" = "1" ] && echo true || echo false)"
+check "mismatch: full webhook payload stored for inspection" "$([ "$(sql "SELECT JSON_EXTRACT(payload,'\$.payload.payment.entity.amount') FROM payment_events WHERE event_id='${EV}_m3'")" = "100" ] && echo true || echo false)"
+
+# Ignored events and unknown orders
+wh "${EV}_r4" "$REFUND_BODY"
+check "refund.processed -> 200 ignored" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ignored"' && echo true || echo false)"
+check "refund.processed recorded and processed" "$([ "$(sql "SELECT event_type FROM payment_events WHERE event_id='${EV}_r4'")" = "refund.processed" ] && [ "$(processed ${EV}_r4)" = "1" ] && echo true || echo false)"
+wh "${EV}_u1" "$(cap_body "order_does_not_exist" "pay_wh_u" 19900)"
+check "captured for unknown razorpay order -> 200 ignored" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ignored"' && echo true || echo false)"
+
+# Retry of an unprocessed event
+sql "UPDATE payment_events SET processed_at=NULL WHERE event_id='${EV}_r4';"
+wh "${EV}_r4" "$REFUND_BODY"
+check "event with processed_at NULL is reprocessed (ignored, not duplicate) and marked processed" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ignored"' && [ "$(processed ${EV}_r4)" = "1" ] && echo true || echo false)"
+sql "INSERT INTO payment_events (event_id, event_type, payload) VALUES ('${EV}_p4', 'payment.captured', NULL);"
+wh "${EV}_p4" "$(cap_body "$WR4" "pay_wh_4" 19900)"
+check "pre-existing unprocessed event row: reprocessed -> order paid, processed_at set" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ok"' && [ "$(order_status $W4)" = "paid" ] && [ "$(processed ${EV}_p4)" = "1" ] && echo true || echo false)"
+
+# Hard copy via webhook
+wh "${EV}_h1" "$(cap_body "$WRH" "pay_wh_h" 34900)"
+check "hardcopy captured webhook -> paid, fulfilment confirmed" "$([ "$WCODE" = "200" ] && [ "$(sql "SELECT CONCAT(status,'|',fulfilment_status) FROM orders WHERE id=$WH")" = "paid|confirmed" ] && echo true || echo false)"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
