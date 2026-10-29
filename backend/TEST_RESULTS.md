@@ -95,3 +95,33 @@ PASS: non-image file upload to cover endpoint returns 400
 
 Results: 23 passed, 0 failed
 ```
+
+## Sub-project 5: Orders, Razorpay, Access Codes (backend)
+
+Run date: 2026-10-29. Gateway mode `fake` (dev), docker compose stack. Zero FAIL lines in every suite.
+
+| Suite | Command | Result |
+|---|---|---|
+| money_pricing_test.php | `docker compose exec -T php php -d display_errors=1 tests/money_pricing_test.php` | 14 passed, 0 failed |
+| address_validator_test.php | same, `tests/address_validator_test.php` | 14 passed, 0 failed |
+| signature_gateway_test.php | same | 27 passed, 0 failed (incl. empty webhook/checkout secret fails closed) |
+| order_fulfillment_test.php | same | 27 passed, 0 failed |
+| codes_test.php | same | 56 passed, 0 failed |
+| reconciler_test.php | same | 25 passed, 0 failed |
+| race_test.php | same | 1 passed, 0 failed |
+| middleware_test.php | same | 5 passed, 0 failed (incl. ErrorHandler logs 500s, not ApiException) |
+| jwt_test.php | same | 6 passed, 0 failed |
+| upload_validator_test.php | same | 3 passed, 0 failed |
+| order_test.sh | `bash backend/tests/order_test.sh` | 132 passed, 0 failed (incl. unknown-order capture is logged) |
+| book_test.sh | `bash backend/tests/book_test.sh` | 25 passed, 0 failed |
+| http_test.sh | `bash backend/tests/http_test.sh` | 23 passed, 0 failed |
+
+Additional checks:
+
+- SP-4 payload unchanged: `GET /api/books` items have exactly `id,title,description,category,coverUrl,onlinePrice,hardcopyPrice`;
+  `GET /api/books/:id` has those plus `indexUrl,previewPages`. The private PDF path returns 404 via nginx (`book_test.sh` section 6).
+- Lazy validation: with every `RAZORPAY_*` and `SMTP_*` line removed from `backend/.env` and the php container recreated,
+  `book_test.sh` passes 25/25 and `/api/health` and `/api/checkout/quote` still return 200. `.env` was then restored byte-identical
+  and `order_test.sh` passed again (132/132).
+- Test data: `order_test.sh` cleans up after itself. The SP-4 `book_test.sh`/`http_test.sh` leave an archived book and test users per run
+  by design; the ones created during this run were deleted.

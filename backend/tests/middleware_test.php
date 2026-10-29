@@ -17,6 +17,7 @@ spl_autoload_register(function (string $class) {
 use App\Auth\Jwt;
 use App\Http\ApiException;
 use App\Middleware\AuthMiddleware;
+use App\Middleware\ErrorHandler;
 
 // Final review finding: the plan's own Review Focus asks for "role confusion
 // → 403, not silently succeed" — correct in the code, but no test (unit or
@@ -51,6 +52,23 @@ $adminToken = Jwt::encode(['sub' => 1, 'role' => 'admin'], 3600);
 $_SERVER['HTTP_AUTHORIZATION'] = "Bearer {$adminToken}";
 $payload = AuthMiddleware::requireRole(['admin']);
 assertTrue($payload['role'] === 'admin', 'admin token on an admin-only route is accepted');
+
+// --- ErrorHandler: unexpected exceptions are logged (class + message only), ApiException is not.
+$logFile = tempnam(sys_get_temp_dir(), 'eh');
+ini_set('error_log', $logFile);
+ob_start();
+ErrorHandler::wrap(function () { throw new RuntimeException('boom-secret-free'); });
+$out = ob_get_clean();
+$log = (string) file_get_contents($logFile);
+assertTrue(str_contains($out, 'server_error') && !str_contains($out, 'boom'), 'ErrorHandler: 500 body stays generic');
+assertTrue(str_contains($log, 'RuntimeException') && str_contains($log, 'boom-secret-free'), 'ErrorHandler: unexpected exception logged with class and message');
+file_put_contents($logFile, '');
+ob_start();
+ErrorHandler::wrap(function () { throw new ApiException('nope', 400, 'validation_error'); });
+ob_end_clean();
+assertTrue(file_get_contents($logFile) === '', 'ErrorHandler: ApiException (expected 4xx) is not logged');
+unlink($logFile);
+http_response_code(200);
 
 if ($failures > 0) {
     echo "\n{$failures} test(s) FAILED.\n";

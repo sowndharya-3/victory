@@ -68,6 +68,9 @@ assertTrue(Signature::verifyWebhook($body, $wsig, 'whsec') === true, 'webhook: v
 assertTrue(Signature::verifyWebhook($body . ' ', $wsig, 'whsec') === false, 'webhook: tampered body rejected');
 assertTrue(Signature::verifyWebhook($body, $wsig, 'nope') === false, 'webhook: wrong secret rejected');
 assertTrue(Signature::verifyWebhook($body, '', 'whsec') === false, 'webhook: empty header rejected');
+assertTrue(Signature::verifyCheckout('order_X', 'pay_Y', hash_hmac('sha256', 'order_X|pay_Y', ''), '') === false, 'checkout: empty secret fails closed');
+$emptyKeySig = hash_hmac('sha256', $body, '');
+assertTrue(Signature::verifyWebhook($body, $emptyKeySig, '') === false, 'webhook: empty secret fails closed (HMAC with empty key never accepted)');
 
 // --- Config::load
 setEnv(['RAZORPAY_GATEWAY' => 'live', 'RAZORPAY_KEY_ID' => 'rzp_test_changeme', 'RAZORPAY_KEY_SECRET' => 'x', 'RAZORPAY_WEBHOOK_SECRET' => 'y']);

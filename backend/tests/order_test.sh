@@ -370,6 +370,7 @@ check "refund.processed -> 200 ignored" "$([ "$WCODE" = "200" ] && jh "$W" '"sta
 check "refund.processed recorded and processed" "$([ "$(sql "SELECT event_type FROM payment_events WHERE event_id='${EV}_r4'")" = "refund.processed" ] && [ "$(processed ${EV}_r4)" = "1" ] && echo true || echo false)"
 wh "${EV}_u1" "$(cap_body "order_does_not_exist" "pay_wh_u" 19900)"
 check "captured for unknown razorpay order -> 200 ignored" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ignored"' && echo true || echo false)"
+check "captured for unknown razorpay order is logged (ids only)" "$(docker compose logs --since 2m php 2>&1 | grep -q 'unknown razorpay order (razorpay_order_id=order_does_not_exist, payment_id=pay_wh_u)' && echo true || echo false)"
 
 # Retry of an unprocessed event
 sql "UPDATE payment_events SET processed_at=NULL WHERE event_id='${EV}_r4';"
