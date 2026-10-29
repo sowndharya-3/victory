@@ -89,6 +89,20 @@ one via the CLI:
 docker compose exec -T php php scripts/seed_admin.php <username> <password>
 ```
 
+### Reconciling pending orders (cron)
+
+`scripts/reconcile_orders.php` fulfils pending orders (older than 15 min) that
+Razorpay reports captured, via the normal paid path; cancels pending orders
+older than 24 h with no capture (payment `failed`, reason `expired`); and purges
+`rate_limits` rows older than 2 days. It prints
+`paid=N cancelled=N errors=N purged=N` and exits non-zero only on a fatal error.
+Run it every 15 minutes:
+
+```cron
+*/15 * * * * cd /path/to/vtee && docker compose exec -T php php scripts/reconcile_orders.php >> /var/log/vtee-reconcile.log 2>&1
+# without Docker: */15 * * * * cd /path/to/vtee/backend && php scripts/reconcile_orders.php >> /var/log/vtee-reconcile.log 2>&1
+```
+
 ## Test results
 
 See `backend/TEST_RESULTS.md` for the actual captured output of the last
