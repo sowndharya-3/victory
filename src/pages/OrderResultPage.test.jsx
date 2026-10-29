@@ -1,8 +1,8 @@
-import { render, screen, act } from '@testing-library/react'
+import { render, screen, act, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { vi } from 'vitest'
 import OrderResultPage from './OrderResultPage'
-import { fetchMyOrder } from '../api/orders'
+import { fetchMyOrder, fetchAccessCode, redeemCode } from '../api/orders'
 
 vi.mock('../api/orders')
 
@@ -103,4 +103,53 @@ test('without a token asks the user to log in', () => {
   renderPage()
   expect(screen.getByRole('link', { name: /log in/i })).toHaveAttribute('href', '/account')
   expect(fetchMyOrder).not.toHaveBeenCalled()
+})
+
+const digitalWithCode = { ...base, digitalCode: { status: 'active', last4: 'PQRS' } }
+
+test('paid digital order shows the access code and redeems it into My Books', async () => {
+  fetchMyOrder.mockResolvedValue(digitalWithCode)
+  fetchAccessCode.mockResolvedValue({ code: 'ABCD-EFGH-JKMN-PQRS' })
+  redeemCode.mockResolvedValue({ bookId: 3, orderId: 7 })
+  renderPage()
+
+  expect(await screen.findByText('ABCD-EFGH-JKMN-PQRS')).toBeInTheDocument()
+  expect(fetchAccessCode).toHaveBeenCalledWith('tok', 7)
+  expect(screen.getByText(/does not unlock the book until you redeem/i)).toBeInTheDocument()
+  expect(localStorage.getItem('vtee-auth-token')).toBe('tok')
+
+  fireEvent.click(screen.getByRole('button', { name: /redeem to my books/i }))
+  expect(await screen.findByText(/added to my books/i)).toBeInTheDocument()
+  expect(redeemCode).toHaveBeenCalledWith('tok', 'ABCD-EFGH-JKMN-PQRS')
+  expect(screen.getByRole('link', { name: /go to my books/i })).toHaveAttribute('href', '/my-books')
+})
+
+test('redeem failure on the result page shows the server message', async () => {
+  fetchMyOrder.mockResolvedValue(digitalWithCode)
+  fetchAccessCode.mockResolvedValue({ code: 'ABCD-EFGH-JKMN-PQRS' })
+  redeemCode.mockRejectedValue(new Error('You already own this book.'))
+  renderPage()
+
+  fireEvent.click(await screen.findByRole('button', { name: /redeem to my books/i }))
+  expect(await screen.findByText('You already own this book.')).toBeInTheDocument()
+})
+
+test('an already redeemed digital order does not fetch or show the code', async () => {
+  fetchMyOrder.mockResolvedValue({ ...base, digitalCode: { status: 'redeemed', last4: 'PQRS' } })
+  renderPage()
+
+  expect(await screen.findByText(/already in your my books/i)).toBeInTheDocument()
+  expect(fetchAccessCode).not.toHaveBeenCalled()
+})
+
+test('hard copy paid shows the tracking code and a track link', async () => {
+  fetchMyOrder.mockResolvedValue({
+    ...base, purchaseType: 'hardcopy', fulfilmentStatus: 'confirmed', trackingCode: 'VTT-ABCD2345',
+    address: { city: 'Chennai' },
+  })
+  renderPage()
+
+  expect(await screen.findByText('VTT-ABCD2345')).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: /track your order/i })).toHaveAttribute('href', '/track')
+  expect(fetchAccessCode).not.toHaveBeenCalled()
 })

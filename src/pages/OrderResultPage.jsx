@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { fetchMyOrder } from '../api/orders'
+import { fetchMyOrder, fetchAccessCode, redeemCode } from '../api/orders'
 import Header from '../components/home/Header'
 import Footer from '../components/home/Footer'
 import PriceBreakdown from '../components/checkout/PriceBreakdown'
@@ -10,6 +10,51 @@ const GIVE_UP_MS = 60000
 
 function Shell({ children }) {
   return <><Header /><div className="container" style={{ padding: '2rem 0' }}>{children}</div><Footer /></>
+}
+
+// Paying never unlocks the book: the owner redeems their code (shown here, never stored in the browser).
+function DigitalCode({ token, order }) {
+  const status = order.digitalCode?.status
+  const [code, setCode] = useState('')
+  const [message, setMessage] = useState('')
+  const [redeemed, setRedeemed] = useState(false)
+
+  useEffect(() => {
+    if (status !== 'active') return undefined
+    let cancelled = false
+    fetchAccessCode(token, order.id)
+      .then(r => { if (!cancelled) setCode(r.code) })
+      .catch(err => { if (!cancelled) setMessage(err.message) })
+    return () => { cancelled = true }
+  }, [status, token, order.id])
+
+  const redeem = async () => {
+    setMessage('')
+    try {
+      await redeemCode(token, code)
+      setCode('')
+      setRedeemed(true)
+    } catch (err) {
+      setMessage(err.message)
+    }
+  }
+
+  if (redeemed) return <p aria-live="polite">Added to My Books. <Link to="/my-books">Go to My Books</Link></p>
+  if (status === 'redeemed') return <p>This book is already in your My Books. <Link to="/my-books">Go to My Books</Link></p>
+
+  return (
+    <section aria-label="Your access code">
+      {code && (
+        <>
+          <p>Your access code:</p>
+          <p><strong style={{ letterSpacing: '0.05em' }}>{code}</strong></p>
+          <p>Payment alone does not unlock the book until you redeem this code. You can also find it later in My Books.</p>
+          <button type="button" className="btn btn-primary" onClick={redeem}>Redeem to My Books</button>
+        </>
+      )}
+      <p aria-live="polite" className="form-error">{message}</p>
+    </section>
+  )
 }
 
 function OrderResultPage() {
@@ -61,6 +106,10 @@ function OrderResultPage() {
           <p>We will ship to {order.address?.city}. We will email you when it ships.</p>
         ) : (
           <p>Your digital order is listed in <Link to="/account">your account</Link>.</p>
+        )}
+        {!hardcopy && <DigitalCode token={token} order={order} />}
+        {hardcopy && order.trackingCode && (
+          <p>Your tracking code: <strong>{order.trackingCode}</strong>. <Link to="/track">Track your order</Link></p>
         )}
       </Shell>
     )

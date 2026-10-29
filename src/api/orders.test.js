@@ -6,6 +6,11 @@ import {
   verifyPayment,
   fetchMyOrders,
   fetchMyOrder,
+  fetchLibrary,
+  redeemCode,
+  fetchAccessCode,
+  reissueCode,
+  trackOrder,
 } from './orders'
 
 vi.mock('./client', () => ({ apiRequest: vi.fn(() => Promise.resolve({ ok: true })) }))
@@ -56,4 +61,33 @@ test('fetchMyOrders GETs /api/me/orders with the token', async () => {
 test('fetchMyOrder GETs /api/me/orders/:id with the token', async () => {
   await fetchMyOrder('tok', 7)
   expect(apiRequest).toHaveBeenCalledWith('/api/me/orders/7', { token: 'tok' })
+})
+
+test('fetchLibrary GETs /api/me/library with the token', async () => {
+  await fetchLibrary('tok')
+  expect(apiRequest).toHaveBeenCalledWith('/api/me/library', { token: 'tok' })
+})
+
+test('redeemCode POSTs the code to /api/me/redeem', async () => {
+  await redeemCode('tok', 'ABCD-EFGH-JKMN-PQRS')
+  expect(apiRequest).toHaveBeenCalledWith('/api/me/redeem', {
+    method: 'POST',
+    token: 'tok',
+    body: { code: 'ABCD-EFGH-JKMN-PQRS' },
+  })
+})
+
+test('fetchAccessCode GETs the order access-code endpoint with the token', async () => {
+  await fetchAccessCode('tok', 9)
+  expect(apiRequest).toHaveBeenCalledWith('/api/me/orders/9/access-code', { token: 'tok' })
+})
+
+test('reissueCode POSTs to the order reissue-code endpoint', async () => {
+  await reissueCode('tok', 9)
+  expect(apiRequest).toHaveBeenCalledWith('/api/me/orders/9/reissue-code', { method: 'POST', token: 'tok' })
+})
+
+test('trackOrder GETs the public track endpoint without a token and encodes the code', async () => {
+  await trackOrder('VTT-AB/CD')
+  expect(apiRequest).toHaveBeenCalledWith('/api/track/VTT-AB%2FCD')
 })

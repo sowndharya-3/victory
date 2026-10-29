@@ -58,7 +58,8 @@ function Header() {
           <li><a href="/#mission-vision" onClick={closeMenu}>Mission & Vision</a></li>
           <li><a href="/#contact" onClick={closeMenu}>Contact</a></li>
           <li><Link to="/books" onClick={closeMenu}>Books</Link></li>
-          <li><Link to="/account" onClick={closeMenu}>My Books</Link></li>
+          <li><Link to="/account" onClick={closeMenu}>Account</Link></li>
+          <li><Link to="/my-books" onClick={closeMenu}>My Books</Link></li>
           <li><Link to="/referral/register" onClick={closeMenu}>Become a Referral Partner</Link></li>
         </ul>
       </div>

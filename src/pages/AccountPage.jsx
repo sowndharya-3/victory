@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { useSession } from '../context/SessionContext'
 import { registerCustomer, loginCustomer } from '../api/auth'
 import { fetchMyOrders } from '../api/orders'
@@ -83,6 +84,7 @@ function AccountPage() {
       <Header />
       <div className="container">
         <h2>My Orders</h2>
+        <p><Link to="/my-books">My Books</Link> · <Link to="/track">Track an order</Link></p>
         <div aria-live="polite">
           {ordersError && <p className="form-error">{ordersError}</p>}
           {!ordersError && orders === null && <p>Loading orders…</p>}
