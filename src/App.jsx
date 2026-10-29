@@ -1,4 +1,6 @@
+import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { captureReferralFromUrl } from './utils/referral'
 import { SessionProvider } from './context/SessionContext'
 import { useScrollReveal } from './hooks/useScrollReveal'
 import HomePage from './pages/HomePage'
@@ -21,11 +23,19 @@ function ScrollReveal() {
   return null
 }
 
+function ReferralCapture() {
+  useEffect(() => {
+    captureReferralFromUrl()
+  }, [])
+  return null
+}
+
 function App() {
   return (
     <SessionProvider>
       <BrowserRouter>
         <ScrollReveal />
+        <ReferralCapture />
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/books" element={<BooksPage />} />
