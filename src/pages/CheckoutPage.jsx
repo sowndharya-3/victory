@@ -1,63 +1,128 @@
-import { useState, useEffect } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useSession } from '../context/SessionContext'
+import { fetchBook } from '../api/books'
+import { fetchQuote, createOrder, verifyPayment } from '../api/orders'
+import { loadRazorpay } from '../utils/razorpay'
+import { getStoredReferral } from '../utils/referral'
 import Header from '../components/home/Header'
 import Footer from '../components/home/Footer'
+import PriceBreakdown from '../components/checkout/PriceBreakdown'
+import AddressForm from '../components/checkout/AddressForm'
+import ReferralCodeInput from '../components/checkout/ReferralCodeInput'
+
+const EMPTY_ADDRESS = { fullName: '', phone: '', addressLine: '', city: '', district: '', state: '', pincode: '' }
+
+function Shell({ children }) {
+  return <><Header /><div className="container">{children}</div><Footer /></>
+}
 
 function CheckoutPage() {
   const { bookId } = useParams()
-  const { state, dispatch } = useSession()
-  const book = state.books.find(b => b.id === bookId && b.published)
-  const activePartners = state.referralPartners.filter(p => p.approved && p.active)
+  const navigate = useNavigate()
+  const { state } = useSession()
+  const token = localStorage.getItem('vtee-auth-token')
 
-  const [email, setEmail] = useState('')
+  const [book, setBook] = useState(null)
+  const [bookStatus, setBookStatus] = useState('loading') // 'loading' | 'ready' | 'missing'
   const [purchaseType, setPurchaseType] = useState('digital')
-  const [referralPartnerId, setReferralPartnerId] = useState('')
-  const [paid, setPaid] = useState(false)
-  const [awaitingPayment, setAwaitingPayment] = useState(false)
+  const [quote, setQuote] = useState(null)
+  const [address, setAddress] = useState(EMPTY_ADDRESS)
+  const [fieldErrors, setFieldErrors] = useState({})
+  const [referral, setReferral] = useState(() => getStoredReferral())
+  const [message, setMessage] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  // The order created for this form's current contents; reused on retry so we never create a second one.
+  const createdRef = useRef(null)
+  const busyRef = useRef(false)
 
-  // CREATE_ORDER assigns the order id internally, so we can't get it back
-  // synchronously from dispatch. Wait for the new order to land in state,
-  // then mark it paid. ponytail: matches by "last order in the list" since
-  // CREATE_ORDER always appends; revisit if orders can be created elsewhere concurrently.
   useEffect(() => {
-    if (!awaitingPayment) return
-    const lastOrder = state.orders[state.orders.length - 1]
-    if (lastOrder && lastOrder.paymentStatus === 'pending') {
-      dispatch({ type: 'MARK_ORDER_PAID', payload: { orderId: lastOrder.id } })
-      setPaid(true)
-      setAwaitingPayment(false)
-    }
-  }, [state.orders, awaitingPayment, dispatch])
+    let cancelled = false
+    fetchBook(bookId)
+      .then(data => { if (!cancelled) { setBook(data); setBookStatus('ready') } })
+      .catch(() => { if (!cancelled) setBookStatus('missing') })
+    return () => { cancelled = true }
+  }, [bookId])
 
-  if (!book) return <><Header /><div className="container">Book not found.</div><Footer /></>
+  useEffect(() => {
+    let cancelled = false
+    setQuote(null)
+    fetchQuote(bookId, purchaseType)
+      .then(q => { if (!cancelled) setQuote(q) })
+      .catch(err => { if (!cancelled) setMessage(err.message) })
+    return () => { cancelled = true }
+  }, [bookId, purchaseType])
 
-  const amount = purchaseType === 'digital' ? book.onlinePrice : book.hardCopyPrice
+  // Any edit invalidates the order that was created from the old values.
+  const edit = (setter) => (value) => { createdRef.current = null; setter(value) }
+  const changeType = edit(setPurchaseType)
+  const changeAddress = edit(setAddress)
+  const changeReferral = edit(setReferral)
 
-  const handlePay = (e) => {
-    e.preventDefault()
-    if (!email) return
-    dispatch({ type: 'LOGIN_CUSTOMER', payload: { email } })
-    dispatch({
-      type: 'CREATE_ORDER',
-      payload: { bookId: book.id, customerEmail: email, purchaseType, amount, referralPartnerId: referralPartnerId || null },
+  if (bookStatus === 'loading') return <Shell>Loading…</Shell>
+  if (bookStatus === 'missing') return <Shell>Book not found.</Shell>
+  if (!token) return <Shell><p><Link to="/account">Log in to continue</Link></p></Shell>
+
+  const openCheckout = async ({ order, razorpay }) => {
+    const Razorpay = await loadRazorpay()
+    const rzp = new Razorpay({
+      key: razorpay.keyId,
+      amount: razorpay.amount,
+      currency: razorpay.currency,
+      order_id: razorpay.orderId,
+      name: 'VTEE',
+      prefill: { email: state.customerEmail || undefined },
+      // Access is never granted here: the server verifies the signature; the result page shows the outcome.
+      handler: async (resp) => {
+        try {
+          await verifyPayment(token, order.id, resp)
+        } catch {
+          // ponytail: result page polls the order, so a failed verify call is not fatal here.
+        }
+        navigate(`/orders/${order.id}/result`)
+      },
+      modal: {
+        ondismiss: () => {
+          setMessage('Payment cancelled. You can try again.')
+          busyRef.current = false
+          setSubmitting(false)
+        },
+      },
     })
-    // Real Razorpay checkout + server-side verification is added in Phase 2.
-    // For now, mark the order paid immediately to unblock the reader/account flows.
-    setAwaitingPayment(true)
+    rzp.on('payment.failed', (resp) => {
+      setMessage(resp?.error?.description || 'Payment failed. You can try again.')
+      busyRef.current = false
+      setSubmitting(false)
+    })
+    rzp.open()
   }
 
-  if (paid) {
-    return (
-      <>
-        <Header />
-        <div className="container">
-          <p>Payment successful. Your order for "{book.title}" is confirmed.</p>
-          <Link to={`/books/${book.id}`} className="btn btn-primary">Back to book</Link>
-        </div>
-        <Footer />
-      </>
-    )
+  const handlePay = async (e) => {
+    e.preventDefault()
+    if (busyRef.current) return
+    busyRef.current = true
+    setSubmitting(true)
+    setMessage('')
+    setFieldErrors({})
+    try {
+      if (!createdRef.current) {
+        const hardcopy = purchaseType === 'hardcopy'
+        createdRef.current = await createOrder(token, {
+          bookId,
+          purchaseType,
+          referralCode: referral.trim() || undefined,
+          ...(hardcopy && { address }),
+        })
+      }
+      await openCheckout(createdRef.current)
+    } catch (err) {
+      setMessage(err.message)
+      if (err.fields) {
+        setFieldErrors(Object.fromEntries(Object.entries(err.fields).map(([k, v]) => [k.replace(/^address\./, ''), v])))
+      }
+      busyRef.current = false
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -67,31 +132,26 @@ function CheckoutPage() {
         <h2>Checkout: {book.title}</h2>
 
         <form onSubmit={handlePay}>
-          <label htmlFor="email">Email</label>
-          <input id="email" type="email" className="form-control" value={email} onChange={e => setEmail(e.target.value)} required />
-
           <fieldset>
             <legend>Purchase type</legend>
             <label>
-              <input type="radio" name="purchaseType" value="digital" checked={purchaseType === 'digital'} onChange={() => setPurchaseType('digital')} />
+              <input type="radio" name="purchaseType" value="digital" checked={purchaseType === 'digital'} onChange={() => changeType('digital')} />
               Digital (₹{book.onlinePrice})
             </label>
             <label>
-              <input type="radio" name="purchaseType" value="hardcopy" checked={purchaseType === 'hardcopy'} onChange={() => setPurchaseType('hardcopy')} />
-              Hard Copy (₹{book.hardCopyPrice})
+              <input type="radio" name="purchaseType" value="hardcopy" checked={purchaseType === 'hardcopy'} onChange={() => changeType('hardcopy')} />
+              Hard Copy (₹{book.hardcopyPrice})
             </label>
           </fieldset>
 
-          <label htmlFor="referralPartner">Referral Partner (optional)</label>
-          <select id="referralPartner" className="form-control" value={referralPartnerId} onChange={e => setReferralPartnerId(e.target.value)}>
-            <option value="">None</option>
-            {activePartners.map(p => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
+          {purchaseType === 'hardcopy' && <AddressForm value={address} onChange={changeAddress} errors={fieldErrors} />}
 
-          <p>Total: ₹{amount}</p>
-          <button type="submit" className="btn btn-primary">Pay with Razorpay</button>
+          <ReferralCodeInput value={referral} onChange={changeReferral} />
+
+          {quote && <PriceBreakdown quote={quote} />}
+
+          <p aria-live="polite" className="form-error">{message}</p>
+          <button type="submit" className="btn btn-primary" disabled={submitting || !quote}>Pay with Razorpay</button>
         </form>
       </section>
       <Footer />

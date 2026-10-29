@@ -13,7 +13,8 @@ export async function apiRequest(path, { method = 'GET', body, token } = {}) {
   const data = await res.json().catch(() => ({}))
 
   if (!res.ok) {
-    throw new Error(data?.error?.message || 'Request failed')
+    // `fields` carries per-field validation messages (e.g. "address.pincode").
+    throw Object.assign(new Error(data?.error?.message || 'Request failed'), { fields: data?.error?.fields })
   }
 
   return data
