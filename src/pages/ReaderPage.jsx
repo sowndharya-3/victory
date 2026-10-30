@@ -16,7 +16,7 @@ function ReaderPage() {
   const token = localStorage.getItem('vtee-auth-token')
   const [access, setAccess] = useState(null)
   const [book, setBook] = useState(null)
-  const [loadError, setLoadError] = useState('')
+  const [loadError, setLoadError] = useState(null)
 
   useEffect(() => {
     if (!token) return undefined
@@ -24,12 +24,14 @@ function ReaderPage() {
     // Owners keep reading unpublished books, so a failed public book lookup is not fatal.
     Promise.all([fetchAccess(token, bookId), fetchBook(bookId).catch(() => null)])
       .then(([a, b]) => { if (!cancelled) { setAccess(a); setBook(b) } })
-      .catch(err => { if (!cancelled) setLoadError(err.message) })
+      .catch(err => { if (!cancelled) setLoadError(err) })
     return () => { cancelled = true }
   }, [token, bookId])
 
-  if (!token) return <Shell><p><Link to="/account">Log in to read this book</Link></p></Shell>
-  if (loadError) return <Shell><p role="alert" className="form-error">{loadError}</p></Shell>
+  const notReady = <Shell><p>This book is not available to read yet. Please try again later.</p></Shell>
+  if (!token || loadError?.status === 401) return <Shell><p><Link to="/account">Log in to read this book</Link></p></Shell>
+  if (loadError?.status >= 500) return notReady // e.g. render_failed while counting pages
+  if (loadError) return <Shell><p role="alert" className="form-error">{loadError.message}</p></Shell>
   if (!access) return <Shell><p aria-live="polite">Loading…</p></Shell>
 
   if (!access.owned) {
@@ -41,7 +43,7 @@ function ReaderPage() {
     )
   }
 
-  if (!access.pageCount) return <Shell><p>This book is not available to read yet. Please try again later.</p></Shell>
+  if (!access.pageCount) return notReady
 
   return (
     <Shell>

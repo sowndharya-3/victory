@@ -8,9 +8,10 @@ export function fetchAccess(token, bookId) {
 // Page images need the Bearer header, so they can't be a plain <img src>; the caller
 // owns the returned blob URL and must URL.revokeObjectURL it.
 // Errors carry `status` (403 forbidden, 404 out of range, 429 rate_limited).
-export async function fetchPageBlobUrl(token, bookId, page) {
+export async function fetchPageBlobUrl(token, bookId, page, signal) {
   const res = await fetch(`${API_BASE_URL}/api/books/${encodeURIComponent(bookId)}/read/pages/${page}`, {
     headers: { Authorization: `Bearer ${token}` },
+    signal,
   })
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))

@@ -15,43 +15,66 @@ function ReaderViewer({ token, bookId, pageCount, book, email, orderNumber }) {
   const [jump, setJump] = useState('')
   const [error, setError] = useState(null)
   const [showIndex, setShowIndex] = useState(false)
+  const [retries, setRetries] = useState(0)
   const [, rerender] = useState(0)
-  // ponytail: holds at most the current and next page's blob URLs, everything else is revoked.
-  const cache = useRef({})
+  // page -> { controller, url? } for the current + next page only (in flight or loaded).
+  // An entry is reused while its page stays in the window; leaving the window aborts it and
+  // revokes its blob. A response whose entry is gone (left window / unmounted) is revoked on arrival.
+  const entries = useRef(new Map())
+  const pageRef = useRef(page)
+  pageRef.current = page
   const touch = useRef(null)
 
   const go = (p) => setPage(Math.min(pageCount, Math.max(1, p)))
 
   useEffect(() => {
-    let cancelled = false
     setError(null)
-    const keep = [page, page + 1].filter(p => p <= pageCount)
-    for (const p of Object.keys(cache.current)) {
-      if (!keep.includes(Number(p))) {
-        URL.revokeObjectURL(cache.current[p])
-        delete cache.current[p]
+    const window_ = new Set([page, page + 1].filter(p => p <= pageCount))
+    for (const [p, entry] of entries.current) {
+      if (!window_.has(p)) {
+        entry.controller.abort()
+        if (entry.url) URL.revokeObjectURL(entry.url)
+        entries.current.delete(p)
       }
     }
-    keep.filter(p => !cache.current[p]).forEach(p => {
-      fetchPageBlobUrl(token, bookId, p)
+    const load = (p) => {
+      if (entries.current.has(p)) return
+      const entry = { controller: new AbortController() }
+      entries.current.set(p, entry)
+      fetchPageBlobUrl(token, bookId, p, entry.controller.signal)
         .then(url => {
-          if (cancelled) { URL.revokeObjectURL(url); return }
-          cache.current[p] = url
+          if (entries.current.get(p) !== entry) { URL.revokeObjectURL(url); return }
+          entry.url = url
           rerender(n => n + 1)
         })
-        .catch(err => { if (!cancelled && p === page) setError(err) }) // prefetch failures are retried on arrival
-    })
-    return () => { cancelled = true }
-  }, [token, bookId, page, pageCount])
+        .catch(err => {
+          if (entries.current.get(p) !== entry) return
+          entries.current.delete(p) // so arriving at / retrying this page fetches again
+          if (p === pageRef.current) setError(err)
+        })
+    }
+    // ponytail: 150 ms debounce so a held arrow key doesn't fetch every skipped page;
+    // pages already in the map render immediately regardless.
+    const timer = setTimeout(() => window_.forEach(load), 150)
+    return () => clearTimeout(timer)
+  }, [token, bookId, page, pageCount, retries])
 
-  useEffect(() => () => {
-    Object.values(cache.current).forEach(url => URL.revokeObjectURL(url))
-    cache.current = {}
+  useEffect(() => {
+    const map = entries.current
+    return () => {
+      for (const entry of map.values()) {
+        entry.controller.abort()
+        if (entry.url) URL.revokeObjectURL(entry.url)
+      }
+      map.clear()
+    }
   }, [])
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.target instanceof HTMLInputElement) return
+      const t = e.target
+      if (e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return
+      if (t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return
       if (e.key === 'ArrowRight') setPage(p => Math.min(pageCount, p + 1))
       if (e.key === 'ArrowLeft') setPage(p => Math.max(1, p - 1))
     }
@@ -85,14 +108,14 @@ function ReaderViewer({ token, bookId, pageCount, book, email, orderNumber }) {
   const mark = `Licensed to ${email || 'you'} · ${orderNumber || bookId}`
   const indexUrl = book?.indexUrl
   const indexIsPdf = indexUrl && /\.pdf($|\?)/i.test(indexUrl)
-  const src = cache.current[page]
+  const src = entries.current.get(page)?.url
 
   return (
     <div className="reader" onContextMenu={block} onDragStart={block}>
       <div className="reader-toolbar">
-        <button type="button" className="btn btn-outline" onClick={() => go(page - 1)} disabled={page <= 1} aria-label="Previous page">‹ Prev</button>
+        <button type="button" className="btn btn-outline" onClick={() => go(page - 1)} disabled={page <= 1}>Previous page</button>
         <p className="reader-status" aria-live="polite">{label}</p>
-        <button type="button" className="btn btn-outline" onClick={() => go(page + 1)} disabled={page >= pageCount} aria-label="Next page">Next ›</button>
+        <button type="button" className="btn btn-outline" onClick={() => go(page + 1)} disabled={page >= pageCount}>Next page</button>
         <form className="reader-jump" onSubmit={submitJump}>
           <label htmlFor="reader-jump">Go to page</label>
           <input id="reader-jump" type="number" value={jump} onChange={e => setJump(e.target.value)} />
@@ -108,7 +131,10 @@ function ReaderViewer({ token, bookId, pageCount, book, email, orderNumber }) {
       <div className="reader-body">
         <div className="reader-page" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
           {error ? (
-            <p role="alert" className="form-error">{errorMessage(error)}</p>
+            <div role="alert">
+              <p className="form-error">{errorMessage(error)}</p>
+              {error.status !== 403 && <button type="button" className="btn btn-outline" onClick={() => setRetries(n => n + 1)}>Retry</button>}
+            </div>
           ) : src ? (
             <img src={src} alt={label} draggable="false" />
           ) : (

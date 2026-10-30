@@ -52,3 +52,32 @@ test('owned shows the viewer at page 1', async () => {
   expect(screen.getByRole('heading', { name: 'Success Mantra' })).toBeInTheDocument()
   expect(fetchAccess).toHaveBeenCalledWith('tok', '7')
 })
+
+test('revoked access shows the no-access message', async () => {
+  fetchAccess.mockResolvedValue({ owned: false, status: 'revoked' })
+  renderPage()
+  expect(await screen.findByText(/access was revoked/i)).toBeInTheDocument()
+  expect(fetchPageBlobUrl).not.toHaveBeenCalled()
+})
+
+test('owned without a page count is not available yet', async () => {
+  fetchAccess.mockResolvedValue({ owned: true, status: 'active' })
+  renderPage()
+  expect(await screen.findByText(/not available to read yet/i)).toBeInTheDocument()
+})
+
+test('access errors: 500 not available, 401 login link, other shows the message', async () => {
+  fetchAccess.mockRejectedValueOnce(Object.assign(new Error('render failed'), { status: 500 }))
+  const first = renderPage()
+  expect(await screen.findByText(/not available to read yet/i)).toBeInTheDocument()
+  first.unmount()
+
+  fetchAccess.mockRejectedValueOnce(Object.assign(new Error('unauthorized'), { status: 401 }))
+  const second = renderPage()
+  expect(await screen.findByRole('link', { name: /log in/i })).toHaveAttribute('href', '/account')
+  second.unmount()
+
+  fetchAccess.mockRejectedValueOnce(Object.assign(new Error('Network down'), { status: 0 }))
+  renderPage()
+  expect(await screen.findByRole('alert')).toHaveTextContent('Network down')
+})
