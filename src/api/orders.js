@@ -67,3 +67,8 @@ export function reissueCode(token, orderId) {
 export function trackOrder(code) {
   return apiRequest(`/api/track/${encodeURIComponent(code)}`)
 }
+
+// Public partner sign-up -> 201 { id, applicationStatus: 'pending' }; 400 fields, 409 duplicate_application, 429.
+export function submitReferralApplication(form) {
+  return apiRequest('/api/referral/applications', { method: 'POST', body: form })
+}

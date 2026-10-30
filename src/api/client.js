@@ -14,7 +14,7 @@ export async function apiRequest(path, { method = 'GET', body, token } = {}) {
 
   if (!res.ok) {
     // `fields` carries per-field validation messages (e.g. "address.pincode").
-    throw Object.assign(new Error(data?.error?.message || 'Request failed'), { fields: data?.error?.fields, status: res.status })
+    throw Object.assign(new Error(data?.error?.message || 'Request failed'), { fields: data?.error?.fields, status: res.status, code: data?.error?.code })
   }
 
   return data

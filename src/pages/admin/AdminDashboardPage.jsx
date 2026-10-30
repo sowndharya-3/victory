@@ -1,26 +1,37 @@
-import { useSession } from '../../context/SessionContext'
+import { fetchDashboard, formatRupees } from '../../api/admin'
+import { useLoad, LoadState } from './adminUi'
+
+const CARDS = [
+  ['publishedBooks', 'Published books'],
+  ['totalCustomers', 'Customers'],
+  ['digitalPurchases', 'Digital purchases'],
+  ['hardcopyOrders', 'Hard copy orders'],
+  ['successfulPayments', 'Successful payments'],
+  ['pendingOrders', 'Hard copies to fulfil'],
+  ['revenue', 'Revenue (net)', true],
+  ['refundedAmount', 'Refunded', true],
+  ['pendingRefunds', 'Open refunds'],
+  ['commissionPending', 'Commission pending', true],
+  ['commissionPayable', 'Commission payable', true],
+]
 
 function AdminDashboardPage() {
-  const { state } = useSession()
-  const totalDigital = state.orders.filter(o => o.purchaseType === 'digital' && o.paymentStatus === 'paid').length
-  const totalHardCopy = state.orders.filter(o => o.purchaseType === 'hardcopy' && o.paymentStatus === 'paid').length
-  const revenue = state.orders.filter(o => o.paymentStatus === 'paid').reduce((sum, o) => sum + o.amount, 0)
-  const commission = state.orders
-    .filter(o => o.paymentStatus === 'paid' && o.referralPartnerId)
-    .reduce((sum, o) => sum + o.commission, 0)
+  const { data, error, loading } = useLoad(fetchDashboard, [])
 
   return (
     <div>
       <h2>Dashboard</h2>
-      <ul>
-        <li>Total Books: {state.books.length}</li>
-        <li>Total Digital Purchases: {totalDigital}</li>
-        <li>Total Hard Copy Purchases: {totalHardCopy}</li>
-        <li>Total Referral Partners: {state.referralPartners.length}</li>
-        <li>Total Orders: {state.orders.length}</li>
-        <li>Revenue: ₹{revenue}</li>
-        <li>Commission Summary: ₹{commission}</li>
-      </ul>
+      <LoadState loading={loading} error={error} />
+      {data && (
+        <ul className="admin-cards">
+          {CARDS.map(([key, text, money]) => (
+            <li key={key}>
+              <span>{text}</span>
+              <strong>{money ? formatRupees(data[key]) : data[key] ?? 0}</strong>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

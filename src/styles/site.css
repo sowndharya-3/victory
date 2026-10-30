@@ -1799,3 +1799,22 @@
             .reader-index { flex: 0 0 340px; position: sticky; top: 16px; }
         }
         @media print { .reader { display: none !important; } }
+
+/* Admin panel (SP-5 Task 21). site.css hides .form-error by default (contact form toggles it); show it in admin. */
+.admin-layout .form-error, .referral-field-error { display: block; padding: 8px 12px; margin: 6px 0; text-align: left; }
+.admin-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 12px 0; max-width: 100%; }
+.admin-table-wrap table { border-collapse: collapse; min-width: 100%; }
+.admin-table-wrap th, .admin-table-wrap td { padding: 6px 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: top; white-space: nowrap; }
+.admin-table-wrap tr.is-selected { background: #fff6e0; }
+.admin-cards { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.admin-cards li { border: 1px solid #ddd; border-radius: var(--border-radius); padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+.admin-cards strong { font-size: 1.3rem; }
+.admin-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
+.admin-filters .form-control { flex: 1 1 220px; width: auto; }
+.admin-form { display: flex; flex-direction: column; gap: 6px; max-width: 480px; margin: 12px 0; }
+.admin-detail { border: 1px solid #ccc; border-radius: var(--border-radius); padding: 16px; margin: 16px 0; overflow-wrap: anywhere; }
+.admin-detail-close { float: right; }
+.admin-badge { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px; background: #f44336; color: #fff; font-size: 0.75rem; }
+.admin-notice { background: #fff6e0; border-left: 4px solid #f0a500; padding: 10px 12px; }
+.admin-issued-code { border: 2px solid #4CAF50; border-radius: var(--border-radius); padding: 12px; margin: 12px 0; background: #effaf0; }
+.admin-issued-code code { font-size: 1.2rem; letter-spacing: 1px; user-select: all; }
