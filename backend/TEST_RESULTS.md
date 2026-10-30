@@ -166,3 +166,16 @@ Run date: 2026-10-30, after migration 007 (`commissions.payable_at`).
 | book_test.sh / http_test.sh | 25/25, 23/23 |
 
 Books 1 and 2: `/api/books` md5-identical before/after. Settings back to their prior values; test applications, partners, commissions, users, rate_limits and audit rows removed (this run's book_test/http_test book 152, its upload dirs and 2 users deleted).
+
+## Task 19 fix round 1 (revoke under lock, refund required to cancel unshipped hard copies)
+
+Run date: 2026-10-30, on top of Task 20.
+
+| Suite | Result |
+|---|---|
+| codes_test.php | 60 passed, 0 failed (+4: reserved `customer_request` admin reason -> 400; revokeCurrent after a racing reissue revokes the new code with an audit row; idempotent; no code -> 404) |
+| order_test.sh | 271 passed, 0 failed (§9: cancel from confirmed/processing -> 409 `refund_required`, cancel after shipping needs a reason kept in audit, control chars in courier/tracking number -> 400) |
+| admin_authz 99, commission 41, reader 33, refund 69, reconciler 25, order_fulfillment 27, money_pricing 14, signature_gateway 27, address_validator 14, middleware 5, jwt 6, upload_validator 3, race 1 | all passed, 0 failed |
+| book_test.sh / http_test.sh | 25/25, 23/23 |
+
+Books 1 and 2: `/api/books` byte-identical before/after; this run's book_test/http_test book and users deleted.

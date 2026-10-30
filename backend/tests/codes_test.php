@@ -206,8 +206,33 @@ try {
     check('buyer reissue of an active code -> allowed', tryReissue($act) === 'ok' && AccessCodeService::revealForOwner($act['uid'], $act['id']) !== $actOld);
     $cr = paidDigital();
     reveal($cr);
-    AccessCodeService::revoke((int) val('SELECT id FROM access_codes WHERE order_id = ?', [$cr['id']]), 1, 'customer_request');
+    // The customer_request revoke happens on the buyer's own reissue path; admins may not use that reason (below).
+    q("UPDATE access_codes SET status = 'revoked', revoked_at = NOW(), revoked_reason = 'customer_request', code_enc = NULL WHERE order_id = ?", [$cr['id']]);
     check('buyer reissue of a code revoked for customer_request -> allowed', tryReissue($cr) === 'ok');
+    $reserved = [];
+    foreach ([fn () => AccessCodeService::revoke((int) val('SELECT MAX(id) FROM access_codes WHERE order_id = ?', [$cr['id']]), 1, 'customer_request'),
+              fn () => AccessCodeService::revokeCurrent($cr['id'], 1, ' Customer_Request '),
+              fn () => AccessCodeService::reissue($cr['id'], 1, null, 'CUSTOMER_REQUEST')] as $fn) {
+        try { $fn(); $reserved[] = 'ok'; } catch (ApiException $e) { $reserved[] = $e->errorCode . '|' . $e->statusCode . '|' . implode(',', array_keys($e->fields)); }
+    }
+    check('admin revoke/revokeCurrent/reissue with reason customer_request (any case/space) -> 400 fields.reason, code still active',
+        $reserved === array_fill(0, 3, 'validation_error|400|reason') && val('SELECT status FROM access_codes WHERE id = (SELECT MAX(id) FROM access_codes WHERE order_id = ?)', [$cr['id']]) === 'active');
+
+    // revokeCurrent decides under the locks: a reissue landing after the admin looked revokes the NEW code.
+    $rc2 = paidDigital();
+    reveal($rc2);
+    $seenId = (int) val('SELECT MAX(id) FROM access_codes WHERE order_id = ?', [$rc2['id']]); // what the admin screen showed
+    tryReissue($rc2);                                                                          // customer reissues meanwhile
+    AccessCodeService::revokeCurrent($rc2['id'], 1, 'fraud');
+    $newId = (int) val('SELECT MAX(id) FROM access_codes WHERE order_id = ?', [$rc2['id']]);
+    check('revokeCurrent after a racing reissue: new code revoked (reason kept), audit row for it',
+        $newId !== $seenId && val('SELECT CONCAT(status, "|", revoked_reason) FROM access_codes WHERE id = ?', [$newId]) === 'revoked|fraud'
+        && (int) val("SELECT COUNT(*) FROM audit_logs WHERE entity_type = 'access_code' AND action = 'access_code.revoke' AND admin_id = 1 AND entity_id = ?", [$newId]) === 1
+        && AccessCodeService::revealForOwner($rc2['uid'], $rc2['id']) === null);
+    AccessCodeService::revokeCurrent($rc2['id'], 1, 'fraud');
+    check('revokeCurrent again: idempotent, no second audit row', (int) val("SELECT COUNT(*) FROM audit_logs WHERE entity_type = 'access_code' AND action = 'access_code.revoke' AND entity_id = ?", [$newId]) === 1);
+    try { AccessCodeService::revokeCurrent(999999999, 1, 'x'); $nf = 'ok'; } catch (ApiException $e) { $nf = $e->errorCode . '|' . $e->statusCode; }
+    check('revokeCurrent on an order without a code -> 404 not_found', $nf === 'not_found|404');
 
     // --- ciphertext is bound to its order (AAD): a blob moved to another order does not decrypt ---
     $hex = val("SELECT HEX(code_enc) FROM access_codes WHERE order_id = ? AND status = 'active'", [$act['id']]);

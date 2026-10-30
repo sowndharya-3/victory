@@ -814,8 +814,10 @@ get_json "$TOKEN_N" "/api/me/orders/$NH"; G1=$G
 get_json "" "/api/track/$TCN"
 check "confirmed -> processing 200; customer and tracking page see processing at once" "$([ "$UCODE" = "200" ] && jh "$U" '"fulfilmentStatus":"processing"' && jh "$G1" '"fulfilmentStatus":"processing"' && jh "$G" '"status":"processing","label":"Processing"' && echo true || echo false)"
 fulfil "$NH" '{"status":"shipped"}'; C1=$UCODE; U1=$U
-fulfil "$NH" '{"status":"shipped","courier":"   "}'
-check "shipped without courier (or blank) -> 400 validation_error fields.courier" "$([ "$C1" = "400" ] && jh "$U1" '"fields":\{"courier"' && [ "$UCODE" = "400" ] && echo true || echo false)"
+fulfil "$NH" '{"status":"shipped","courier":"   "}'; C2=$UCODE
+fulfil "$NH" '{"status":"shipped","courier":"India\u0000Post"}'; C3=$UCODE
+fulfil "$NH" '{"status":"shipped","courier":"India Post","trackingNumber":"EE1\nBcc: x"}'
+check "shipped without courier / blank / control chars in courier or tracking number -> 400 fields" "$([ "$C1" = "400" ] && jh "$U1" '"fields":\{"courier"' && [ "$C2" = "400" ] && [ "$C3" = "400" ] && [ "$UCODE" = "400" ] && jh "$U" '"fields":\{"trackingNumber"' && [ "$(sql "SELECT fulfilment_status FROM orders WHERE id=$NH")" = "processing" ] && echo true || echo false)"
 fulfil "$NH" '{"status":"shipped","courier":"India Post","trackingNumber":"EE123456789IN"}'
 check "processing -> shipped 200; courier, tracking number and shipped_at stored" "$([ "$UCODE" = "200" ] && [ "$(sql "SELECT CONCAT(fulfilment_status,'|',courier,'|',tracking_number,'|',shipped_at IS NOT NULL) FROM orders WHERE id=$NH")" = "shipped|India Post|EE123456789IN|1" ] && echo true || echo false)"
 get_json "" "/api/track/$TCN"
@@ -828,10 +830,17 @@ check "shipped -> out_for_delivery -> delivered 200; delivered -> cancelled 400;
 fulfil "$NH2" '{"status":"processing"}'; C1=$UCODE
 fulfil "$NH2" '{"status":"shipped","courier":"DTDC"}'; C2=$UCODE
 fulfil "$NH2" '{"status":"delivered"}'; C3=$UCODE
-fulfil "$NH3" '{"status":"cancelled"}'; C4=$UCODE
+check "shipped -> delivered (skip out_for_delivery) ok" "$([ "$C1$C2$C3" = "200200200" ] && echo true || echo false)"
+fulfil "$NH3" '{"status":"cancelled","reason":"Out of stock"}'; C1=$UCODE; U1=$U
+fulfil "$NH3" '{"status":"processing"}'; C2=$UCODE
+fulfil "$NH3" '{"status":"cancelled","reason":"Out of stock"}'
+check "cancel unshipped paid hard copy (confirmed, processing) -> 409 refund_required naming the refund endpoint, nothing changed" "$([ "$C1" = "409" ] && jh "$U1" '"code":"refund_required"' && jh "$U1" 'api.{1,2}admin.{1,2}orders.{1,2}\{id\}.{1,2}refund' && [ "$C2" = "200" ] && [ "$UCODE" = "409" ] && [ "$(sql "SELECT CONCAT(status,'|',fulfilment_status) FROM orders WHERE id=$NH3")" = "paid|processing" ] && echo true || echo false)"
+fulfil "$NH3" '{"status":"shipped","courier":"DTDC"}'; C1=$UCODE
+fulfil "$NH3" '{"status":"cancelled"}'; C2=$UCODE; U2=$U
+fulfil "$NH3" '{"status":"cancelled","reason":"Returned to sender"}'; C3=$UCODE
 fulfil "$NH3" '{"status":"processing"}'
-check "shipped -> delivered (skip out_for_delivery) ok; confirmed -> cancelled ok; cancelled is final" "$([ "$C1$C2$C3$C4" = "200200200200" ] && [ "$UCODE" = "400" ] && echo true || echo false)"
-check "fulfilment audit rows: 4 for NH (admin id), none for rejected attempts, NH3 to=cancelled" "$([ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE entity_type='order' AND entity_id=$NH AND action='order.fulfilment' AND admin_id IS NOT NULL")" = "4" ] && [ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE entity_type='order' AND entity_id IN ($ND,$NP)")" = "0" ] && [ "$(sql "SELECT JSON_UNQUOTE(JSON_EXTRACT(detail,'\$.to')) FROM audit_logs WHERE entity_type='order' AND entity_id=$NH3")" = "cancelled" ] && echo true || echo false)"
+check "cancel after shipping: no reason 400 fields.reason, with reason 200; cancelled is final" "$([ "$C1" = "200" ] && [ "$C2" = "400" ] && jh "$U2" '"fields":\{"reason"' && [ "$C3" = "200" ] && [ "$UCODE" = "400" ] && echo true || echo false)"
+check "fulfilment audit rows: 4 for NH (admin id), none for rejected attempts, NH3 cancel row keeps the reason" "$([ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE entity_type='order' AND entity_id=$NH AND action='order.fulfilment' AND admin_id IS NOT NULL")" = "4" ] && [ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE entity_type='order' AND entity_id IN ($ND,$NP)")" = "0" ] && [ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE entity_type='order' AND entity_id=$NH3")" = "3" ] && [ "$(sql "SELECT CONCAT(JSON_UNQUOTE(JSON_EXTRACT(detail,'\$.to')),'|',JSON_UNQUOTE(JSON_EXTRACT(detail,'\$.reason'))) FROM audit_logs WHERE entity_type='order' AND entity_id=$NH3 ORDER BY id DESC LIMIT 1")" = "cancelled|Returned to sender" ] && echo true || echo false)"
 get_json "$ADMIN_TOKEN" "/api/admin/audit-logs?entityType=order&entityId=$NH"
 check "GET audit-logs?entityType=order&entityId -> the 4 fulfilment rows" "$([ "$GCODE" = "200" ] && [ "$(count_of "$G" '"action":"order.fulfilment"')" = "4" ] && jh "$G" '"total":4' && echo true || echo false)"
 

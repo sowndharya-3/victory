@@ -50,14 +50,7 @@ class AdminCodeController
         $admin = AuthMiddleware::requireRole(['admin']);
         $orderId = AdminOrderController::id($id);
         $reason = AdminOrderController::text(AdminOrderController::body(), 'reason', 255, true);
-        $stmt = Db::connection()->prepare('SELECT id FROM access_codes WHERE order_id = ? ORDER BY id DESC LIMIT 1');
-        $stmt->execute([$orderId]);
-        $codeId = $stmt->fetchColumn();
-        if ($codeId === false) {
-            throw new ApiException('Access code not found', 404, 'not_found');
-        }
-        // ponytail: a reissue racing between this read and the lock leaves the new code active (revoke of the old one is a no-op); the admin sees it in the returned detail.
-        AccessCodeService::revoke((int) $codeId, (int) $admin['sub'], $reason);
+        AccessCodeService::revokeCurrent($orderId, (int) $admin['sub'], $reason);
         echo json_encode(AdminOrderController::detail($orderId));
     }
 

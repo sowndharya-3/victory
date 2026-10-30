@@ -25,3 +25,11 @@ Minors / open:
 - Revoke reads the latest code id before taking the lock; a reissue racing in between leaves the new code active (admin sees it in the response).
 - Reissue rate limit (30/10 min) not exercised by a test (same RateLimiter path as verify, which is).
 - Customer detail returns newest 200 orders unpaged.
+
+## Fix round 1 (review: changes required)
+
+- I1: `AccessCodeService::revokeCurrent(orderId, adminId, reason)` locks the order, then the latest code (FOR UPDATE), revokes it and writes the audit row in one transaction (404 if the order has no code). The admin revoke endpoint uses it; `revokeForRefund` shares the same private `revokeLatest` (runs in the caller's transaction, same lock order). codes_test: a reissue landing between the admin's view and the revoke -> the NEW code is revoked, with an audit row; the second call is idempotent; no code -> 404.
+- I2: cancelling a `confirmed`/`processing` paid hard copy -> 409 `refund_required` (points to POST /api/admin/orders/{id}/refund; refund completion cancels fulfilment). Cancelling from `shipped`/`out_for_delivery` needs `reason` (1-255), which is stored in the audit row.
+- M1: admin revoke/revokeCurrent/reissue reject the reason `customer_request` (trimmed, any case) with 400 fields.reason, enforced in AccessCodeService. codes_test now sets the customer_request revoke through SQL.
+- M3: control characters (\p{Cc}) are rejected in courier/trackingNumber and in admin reasons (shared `text()` helper).
+- M6: `AdminOrderController::select()` throws a LogicException if the OrderFormatter::SELECT prefix is missing.

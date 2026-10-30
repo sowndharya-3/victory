@@ -113,6 +113,9 @@ class AccessCodeService
     /** Revokes the current code (and the access it granted), issues a new one; returns it formatted. */
     public static function reissue(int $orderId, ?int $adminId, ?int $userId, string $reason): string
     {
+        if ($adminId !== null) {
+            self::adminReason($reason);
+        }
         return self::transaction(function () use ($orderId, $adminId, $userId, $reason) {
             $db = Db::connection();
             $order = self::lockOrder($orderId);
@@ -145,6 +148,7 @@ class AccessCodeService
     /** Idempotent: revoking an already revoked code changes nothing. */
     public static function revoke(int $codeId, int $adminId, string $reason): void
     {
+        self::adminReason($reason);
         $db = Db::connection();
         $stmt = $db->prepare('SELECT order_id FROM access_codes WHERE id = ?');
         $stmt->execute([$codeId]);
@@ -172,12 +176,45 @@ class AccessCodeService
      */
     public static function revokeForRefund(int $orderId, ?int $adminId): void
     {
+        self::revokeLatest($orderId, $adminId, 'refund');
+    }
+
+    /**
+     * Admin revoke of the order's current code, decided under the orders + access_codes locks, so a reissue
+     * racing in can't leave the new code live. Idempotent when it is already revoked. 404 when the order has no code.
+     */
+    public static function revokeCurrent(int $orderId, int $adminId, string $reason): void
+    {
+        self::adminReason($reason);
+        self::transaction(function () use ($orderId, $adminId, $reason) {
+            if (!self::revokeLatest($orderId, $adminId, $reason)) {
+                throw new ApiException('Access code not found', 404, 'not_found');
+            }
+        });
+    }
+
+    /** Lock order: orders row, then the latest access_codes row. Runs in the caller's transaction. False when no code. */
+    private static function revokeLatest(int $orderId, ?int $adminId, string $reason): bool
+    {
+        self::lockOrder($orderId);
         $stmt = Db::connection()->prepare('SELECT * FROM access_codes WHERE order_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE');
         $stmt->execute([$orderId]);
         $c = $stmt->fetch();
-        if ($c && $c['status'] !== 'revoked') {
-            self::revokeRow($c, 'refund');
-            self::audit($adminId, null, 'access_code.revoke', (int) $c['id'], ['orderId' => $orderId, 'reason' => 'refund']);
+        if (!$c) {
+            return false;
+        }
+        if ($c['status'] !== 'revoked') {
+            self::revokeRow($c, $reason);
+            self::audit($adminId, null, 'access_code.revoke', (int) $c['id'], ['orderId' => $orderId, 'reason' => $reason]);
+        }
+        return true;
+    }
+
+    /** 'customer_request' is the sentinel that lets a buyer reissue; an admin reason must never equal it. */
+    private static function adminReason(string $reason): void
+    {
+        if (strtolower(trim($reason)) === 'customer_request') {
+            throw new ApiException('Validation failed', 400, 'validation_error', ['reason' => 'This reason is reserved']);
         }
     }
 

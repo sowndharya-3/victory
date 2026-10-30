@@ -26,13 +26,18 @@ class AdminOrderController
     /** OrderFormatter::SELECT (order + book + latest code status/last4) plus customer and Razorpay payment id. */
     public static function select(): string
     {
-        return str_replace(
+        $sql = str_replace(
             'SELECT o.*,',
             "SELECT o.*, u.name AS user_name, u.email AS user_email, u.phone AS user_phone,
                 (SELECT p.razorpay_payment_id FROM payments p WHERE p.order_id = o.id AND p.razorpay_payment_id IS NOT NULL
                   ORDER BY p.status IN ('captured', 'refunded') DESC, p.id DESC LIMIT 1) AS razorpay_payment_id,",
-            OrderFormatter::SELECT
-        ) . ' JOIN users u ON u.id = o.user_id';
+            OrderFormatter::SELECT,
+            $count
+        );
+        if ($count !== 1) { // OrderFormatter::SELECT changed shape: fail loudly, never query without the customer columns
+            throw new \LogicException('OrderFormatter::SELECT no longer starts with "SELECT o.*,"');
+        }
+        return $sql . ' JOIN users u ON u.id = o.user_id';
     }
 
     public function list(): void
@@ -96,6 +101,7 @@ class AdminOrderController
             $courier = self::text($data, 'courier', 100, true);
             $trackingNumber = self::text($data, 'trackingNumber', 100, false);
         }
+        $reason = $to === 'cancelled' ? self::text($data, 'reason', 255, false) : null;
 
         $db = Db::connection();
         $db->beginTransaction();
@@ -111,8 +117,15 @@ class AdminOrderController
                 throw new ApiException('Only paid hard-copy orders have fulfilment', 400, 'invalid_transition');
             }
             $from = $o['fulfilment_status'];
+            // Not yet shipped: the money goes back through the refund flow, which cancels fulfilment itself on completion.
+            if ($to === 'cancelled' && in_array($from, ['confirmed', 'processing'], true)) {
+                throw new ApiException('Cancel an unshipped paid order by refunding it: POST /api/admin/orders/{id}/refund', 409, 'refund_required');
+            }
             if (!in_array($to, self::NEXT[$from] ?? [], true)) {
                 throw new ApiException("Cannot move fulfilment from $from to $to", 400, 'invalid_transition');
+            }
+            if ($to === 'cancelled' && $reason === null) {
+                throw new ApiException('Validation failed', 400, 'validation_error', ['reason' => 'Required, 1-255 characters']);
             }
             if ($to === 'shipped') {
                 $db->prepare('UPDATE orders SET fulfilment_status = ?, courier = ?, tracking_number = ?, shipped_at = NOW() WHERE id = ?')
@@ -121,7 +134,7 @@ class AdminOrderController
                 $db->prepare('UPDATE orders SET fulfilment_status = ? WHERE id = ?')->execute([$to, $orderId]);
             }
             $db->prepare("INSERT INTO audit_logs (admin_id, action, entity_type, entity_id, detail) VALUES (?, 'order.fulfilment', 'order', ?, ?)")
-                ->execute([(int) $admin['sub'], $orderId, json_encode(['from' => $from, 'to' => $to, 'courier' => $courier, 'trackingNumber' => $trackingNumber])]);
+                ->execute([(int) $admin['sub'], $orderId, json_encode(['from' => $from, 'to' => $to, 'courier' => $courier, 'trackingNumber' => $trackingNumber] + ($reason !== null ? ['reason' => $reason] : []))]);
             $db->commit();
         } catch (\Throwable $e) {
             $db->rollBack();
@@ -296,7 +309,7 @@ class AdminOrderController
         return is_array($data) ? $data : [];
     }
 
-    /** Trimmed string field, 1..$max chars when present; null when optional and absent/empty. */
+    /** Trimmed single-line string field, 1..$max chars when present; null when optional and absent/empty. */
     public static function text(array $data, string $key, int $max, bool $required): ?string
     {
         $v = $data[$key] ?? null;
@@ -304,7 +317,8 @@ class AdminOrderController
         if (($v === null || $v === '') && !$required) {
             return null;
         }
-        if (!is_string($v) || $v === '' || mb_strlen($v) > $max) {
+        // \p{Cc}: no control characters (newlines, NUL, ...); an invalid UTF-8 string also fails here.
+        if (!is_string($v) || $v === '' || mb_strlen($v) > $max || preg_match('/\p{Cc}/u', $v) !== 0) {
             throw new ApiException('Validation failed', 400, 'validation_error', [$key => "Required, 1-$max characters"]);
         }
         return $v;
