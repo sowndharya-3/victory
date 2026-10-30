@@ -98,7 +98,7 @@ Results: 23 passed, 0 failed
 
 ## Sub-project 5: Orders, Razorpay, Access Codes (backend)
 
-Run date: 2026-10-29 (re-run after Task 16 refunds, migration 004 applied additively). Gateway mode `fake` (dev), docker compose stack. Zero FAIL lines in every suite.
+Run date: 2026-10-30 (re-run after the Task 16 review fixes: late refund webhooks, refund.failed). Gateway mode `fake` (dev), docker compose stack. Zero FAIL lines in every suite.
 
 | Suite | Command | Result |
 |---|---|---|
@@ -112,8 +112,8 @@ Run date: 2026-10-29 (re-run after Task 16 refunds, migration 004 applied additi
 | middleware_test.php | same | 5 passed, 0 failed (incl. ErrorHandler logs 500s, not ApiException) |
 | jwt_test.php | same | 6 passed, 0 failed |
 | upload_validator_test.php | same | 3 passed, 0 failed |
-| refund_test.php | same | 58 passed, 0 failed (Task 16; incl. two racing requests -> one row; run 6 times green) |
-| order_test.sh | `bash backend/tests/order_test.sh` | 174 passed, 0 failed (incl. unknown-order capture is logged; §7 refunds over HTTP) |
+| refund_test.php | same | 69 passed, 0 failed (Task 16; incl. two racing requests -> one row, two racing approves -> one gateway call, late webhook on a failed refund with a newer open one; run 3 times green) |
+| order_test.sh | `bash backend/tests/order_test.sh` | 177 passed, 0 failed (incl. unknown-order capture is logged; §7 refunds over HTTP, refund.failed) |
 | book_test.sh | `bash backend/tests/book_test.sh` | 25 passed, 0 failed |
 | http_test.sh | `bash backend/tests/http_test.sh` | 23 passed, 0 failed |
 

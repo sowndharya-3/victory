@@ -116,9 +116,10 @@ the API: `unauthorized` 401, `forbidden` 403 (wrong role), `not_found` 404, `val
 
 1. In the Razorpay dashboard (Settings > Webhooks) add a webhook with URL
    `https://<your-domain>/api/webhooks/razorpay` and active events `payment.captured`,
-   `payment.failed` and `refund.processed` (other events are accepted and ignored). `refund.processed`
-   finalises our refund matched by refund id (or by payment id if the id was never stored) when the amount
-   is the full refund; anything else is `ignored` and logged (ids only).
+   `payment.failed`, `refund.processed` and `refund.failed` (other events are accepted and ignored). `refund.processed`
+   finalises our refund matched by refund id (or by payment id if the id was never stored, preferring the order's
+   open refund) when the amount is the full refund; anything else is `ignored` and logged (ids only).
+   `refund.failed` moves a `processing` refund to `failed` (approve again retries); nothing else changes.
 2. Enter a webhook secret there and set the same value as `RAZORPAY_WEBHOOK_SECRET` in `backend/.env`.
 3. Requests must carry `X-Razorpay-Signature` (HMAC-SHA256 of the raw body) and `X-Razorpay-Event-Id`
    (used for idempotency; a repeated id returns `duplicate`). A bad signature is 400 `invalid_signature`.

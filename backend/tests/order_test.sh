@@ -582,6 +582,12 @@ check "rejected refund shows its note to its owner only" "$(jh "$G1" '"status":"
 post_json "$TOKEN_K" "/api/me/orders/$KD/refund-request" '{"reason":"please reconsider"}'; RFK2=$(id_of "$P")
 check "new request after rejection -> 201" "$([ "$PCODE" = "201" ] && [ -n "$RFK2" ] && [ "$RFK2" != "$RFK" ] && echo true || echo false)"
 sql "UPDATE refunds SET status='processing', reviewed_by_admin_id=1, razorpay_refund_id='rfnd_ordertest_$STAMP' WHERE id=$RFK2;"
+wh "${EV}_rff1" "$(rf_body "rfnd_ordertest_$STAMP" "$KPAY" 19900 | sed 's/refund.processed/refund.failed/; s/"processed"/"failed"/')"
+check "refund.failed (processing) -> ok; refund failed, order paid, code active" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ok"' && [ "$(sql "SELECT status FROM refunds WHERE id=$RFK2")" = "failed" ] && [ "$(order_status $KD)" = "paid" ] && [ "$(sql "SELECT status FROM access_codes WHERE order_id=$KD ORDER BY id DESC LIMIT 1")" = "active" ] && echo true || echo false)"
+wh "${EV}_rff1" "$(rf_body "rfnd_ordertest_$STAMP" "$KPAY" 19900 | sed 's/refund.processed/refund.failed/; s/"processed"/"failed"/')"; C1=$WCODE; W1B=$W
+wh "${EV}_rff2" "$(rf_body "rfnd_unknown_$STAMP" "$KPAY" 19900 | sed 's/refund.processed/refund.failed/')"
+check "refund.failed replay -> duplicate; unknown refund -> ignored" "$([ "$C1" = "200" ] && jh "$W1B" '"status":"duplicate"' && [ "$WCODE" = "200" ] && jh "$W" '"status":"ignored"' && echo true || echo false)"
+sql "UPDATE refunds SET status='processing' WHERE id=$RFK2;" # as if approved again and pending
 wh "${EV}_rf2" "$(rf_body "rfnd_ordertest_$STAMP" "$KPAY" 19900)"
 check "refund.processed (by refund id) -> ok; refund, order, payment refunded; code revoked" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ok"' && [ "$(sql "SELECT status FROM refunds WHERE id=$RFK2")" = "refunded" ] && [ "$(order_status $KD)" = "refunded" ] && [ "$(sql "SELECT status FROM payments WHERE order_id=$KD")" = "refunded" ] && [ "$(sql "SELECT status FROM access_codes WHERE order_id=$KD ORDER BY id DESC LIMIT 1")" = "revoked" ] && echo true || echo false)"
 wh "${EV}_rf2" "$(rf_body "rfnd_ordertest_$STAMP" "$KPAY" 19900)"
@@ -591,11 +597,14 @@ check "replayed refund.processed -> 200 duplicate" "$([ "$WCODE" = "200" ] && jh
 ADDR2="{\"bookId\":$BOOK_ID,\"purchaseType\":\"hardcopy\",\"address\":$ADDR}"
 paid_order "$TOKEN_J" "$ADDR2"; JH2=$NID; JH2PAY=$NPAY
 post_json "$TOKEN_J" "/api/me/orders/$JH2/refund-request" '{"reason":"not needed"}'; RFH2=$(id_of "$P")
-sql "UPDATE refunds SET status='processing', reviewed_by_admin_id=1 WHERE id=$RFH2;"
+# Realistic state: the approve timed out (refund failed, no refund id) and the customer has since asked again.
+sql "UPDATE refunds SET status='failed', reviewed_by_admin_id=1 WHERE id=$RFH2;"
+post_json "$TOKEN_J" "/api/me/orders/$JH2/refund-request" '{"reason":"asking again"}'; RFH2B=$(id_of "$P")
+check "failed refund (no refund id) + newer requested refund on the same order" "$([ "$PCODE" = "201" ] && [ "$(sql "SELECT CONCAT(status,'|',razorpay_refund_id IS NULL) FROM refunds WHERE id=$RFH2")" = "failed|1" ] && [ "$(sql "SELECT status FROM refunds WHERE id=$RFH2B")" = "requested" ] && echo true || echo false)"
 wh "${EV}_rf3" "$(rf_body "rfnd_ordertest_b$STAMP" "$JH2PAY" 100)"
-check "refund.processed with a different amount -> ignored, refund still processing" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ignored"' && [ "$(sql "SELECT status FROM refunds WHERE id=$RFH2")" = "processing" ] && [ "$(order_status $JH2)" = "paid" ] && echo true || echo false)"
+check "refund.processed with a different amount -> ignored, refunds unchanged" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ignored"' && [ "$(sql "SELECT GROUP_CONCAT(status ORDER BY id) FROM refunds WHERE order_id=$JH2")" = "failed,requested" ] && [ "$(order_status $JH2)" = "paid" ] && echo true || echo false)"
 wh "${EV}_rf4" "$(rf_body "rfnd_ordertest_b$STAMP" "$JH2PAY" 34900)"
-check "refund.processed matched by payment id -> refunded, refund id stored, fulfilment cancelled" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ok"' && [ "$(sql "SELECT CONCAT(status,'|',razorpay_refund_id) FROM refunds WHERE id=$RFH2")" = "refunded|rfnd_ordertest_b$STAMP" ] && [ "$(sql "SELECT CONCAT(status,'|',fulfilment_status) FROM orders WHERE id=$JH2")" = "refunded|cancelled" ] && echo true || echo false)"
+check "refund.processed by payment id -> ok (no 500); the open requested refund refunded with the id, failed one untouched, fulfilment cancelled" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ok"' && [ "$(sql "SELECT CONCAT(status,'|',razorpay_refund_id) FROM refunds WHERE id=$RFH2B")" = "refunded|rfnd_ordertest_b$STAMP" ] && [ "$(sql "SELECT CONCAT(status,'|',razorpay_refund_id IS NULL) FROM refunds WHERE id=$RFH2")" = "failed|1" ] && [ "$(sql "SELECT COUNT(*) FROM refunds WHERE order_id=$JH2 AND status='refunded'")" = "1" ] && [ "$(sql "SELECT CONCAT(status,'|',fulfilment_status) FROM orders WHERE id=$JH2")" = "refunded|cancelled" ] && echo true || echo false)"
 wh "${EV}_rf5" "$(rf_body "rfnd_unknown_$STAMP" "pay_unknown_$STAMP" 100)"
 check "refund.processed for an unknown refund -> ignored, logged (ids only)" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ignored"' && docker compose logs --since 2m php 2>&1 | grep -q "refund.processed for unknown refund (refund_id=rfnd_unknown_$STAMP, payment_id=pay_unknown_$STAMP)" && echo true || echo false)"
 

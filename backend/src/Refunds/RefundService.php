@@ -89,6 +89,8 @@ class RefundService
             }
             self::audit($adminId, 'refund.approve', $refundId, ['orderId' => (int) $r['order_id']]);
 
+            // ponytail: refund + payment/order row locks are held across the gateway call (<=10s timeout); fine at
+            // this volume. Upgrade path: commit a lock-free reservation status first, call the gateway, then settle.
             try {
                 // Full refund of the stored captured amount; Razorpay refuses to refund a fully refunded payment again.
                 $g = $this->gateway->refund($pay['razorpay_payment_id'], Money::toPaise($pay['amount']), "refund_{$refundId}");
@@ -145,18 +147,54 @@ class RefundService
 
     /**
      * Money confirmed back (gateway `processed` or signed webhook). Idempotent: an already refunded refund is a no-op.
+     * $fromWebhook (signed refund.processed): money has left for this order, so a `requested` refund is finalised too
+     * (e.g. the webhook overtook an in-flight approve; the row lock makes us wait for it to commit first).
      * @return bool false when the refund is in a state that never reached the gateway (requested/rejected)
      */
-    public function finalise(int $refundId, ?string $razorpayRefundId = null): bool
+    public function finalise(int $refundId, ?string $razorpayRefundId = null, bool $fromWebhook = false): bool
     {
         $db = Db::connection();
         $db->beginTransaction();
         try {
             $r = self::lockRefund($refundId);
-            if ($razorpayRefundId !== null && $r['razorpay_refund_id'] === null && $r['status'] !== 'refunded') {
-                $db->prepare('UPDATE refunds SET razorpay_refund_id = ? WHERE id = ?')->execute([$razorpayRefundId, $refundId]);
+            if ($r['status'] === 'failed') {
+                // A refund opened on the order after this one failed: finalising this one would collide on
+                // uq_open_refund (refunded counts as open), so the open one takes the money; this one stays failed.
+                $stmt = $db->prepare('SELECT * FROM refunds WHERE order_id = ? AND is_open = 1 AND id <> ? FOR UPDATE');
+                $stmt->execute([$r['order_id'], $refundId]);
+                if ($open = $stmt->fetch()) {
+                    if ($r['razorpay_refund_id'] !== null) {
+                        $razorpayRefundId = null; // uq_refunds_rzp_refund: that id already lives on the failed row
+                    }
+                    $r = $open;
+                }
             }
-            $ok = $this->finaliseLocked($r);
+            if ($razorpayRefundId !== null && $r['razorpay_refund_id'] === null && $r['status'] !== 'refunded') {
+                $db->prepare('UPDATE refunds SET razorpay_refund_id = ? WHERE id = ?')->execute([$razorpayRefundId, $r['id']]);
+            }
+            $ok = $this->finaliseLocked($r, $fromWebhook);
+            $db->commit();
+            return $ok;
+        } catch (\Throwable $e) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    /** Signed refund.failed: a pending (processing) refund the gateway gave up on -> failed (approve again retries). No money-side changes. */
+    public function markFailed(int $refundId): bool
+    {
+        $db = Db::connection();
+        $db->beginTransaction();
+        try {
+            $r = self::lockRefund($refundId);
+            $ok = $r['status'] === 'processing';
+            if ($ok) {
+                $db->prepare("UPDATE refunds SET status = 'failed', admin_note = 'Gateway reported the refund failed; approve again to retry' WHERE id = ?")->execute([$refundId]);
+                self::audit($r['reviewed_by_admin_id'] === null ? null : (int) $r['reviewed_by_admin_id'], 'refund.failed', $refundId, ['orderId' => (int) $r['order_id'], 'gatewayStatus' => 'failed']);
+            }
             $db->commit();
             return $ok;
         } catch (\Throwable $e) {
@@ -179,12 +217,13 @@ class RefundService
     }
 
     /** Caller holds the refund row lock inside a transaction. */
-    private function finaliseLocked(array $r): bool
+    private function finaliseLocked(array $r, bool $fromWebhook): bool
     {
         if ($r['status'] === 'refunded') {
             return true;
         }
-        if (!in_array($r['status'], ['approved', 'processing', 'failed'], true)) {
+        $allowed = $fromWebhook ? ['requested', 'approved', 'processing', 'failed'] : ['approved', 'processing', 'failed'];
+        if (!in_array($r['status'], $allowed, true)) {
             error_log("refund {$r['id']}: finalise refused in status {$r['status']}");
             return false;
         }

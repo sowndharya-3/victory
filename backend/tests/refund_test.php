@@ -309,6 +309,66 @@ try {
     $rqid = (int) $svc->request($rq['uid'], $rq['id'], 'x')['refund']['id'];
     check('finalise on a merely requested refund -> false, nothing changes', $svc->finalise($rqid) === false && refundRow($rqid)['status'] === 'requested' && val('SELECT status FROM orders WHERE id = ?', [$rq['id']]) === 'paid');
 
+    // --- late webhook (fromWebhook=true): failed refund, no stored id, newer request open on the order ---
+    $lw = paidOrder('digital', true);
+    $lwFailed = (int) $svc->request($lw['uid'], $lw['id'], 'x')['refund']['id'];
+    $gw->next = 'throw';
+    $svc->approve($lwFailed, $ADMIN, null); // timed out, but the money actually went
+    $gw->next = 'processed';
+    $lwOpen = (int) $svc->request($lw['uid'], $lw['id'], 'still want it')['refund']['id'];
+    check('fixture: failed refund with NULL refund id + newer requested refund on the same order', refundRow($lwFailed)['status'] === 'failed' && refundRow($lwFailed)['razorpay_refund_id'] === null && refundRow($lwOpen)['status'] === 'requested');
+    $calls = count($gw->calls);
+    $ok = $svc->finalise($lwFailed, "rfnd_late_$tag", true);
+    check('webhook finalise of the failed one -> true, the open one refunded with the refund id, failed one untouched', $ok === true && refundRow($lwOpen)['status'] === 'refunded' && refundRow($lwOpen)['razorpay_refund_id'] === "rfnd_late_$tag" && refundRow($lwFailed)['status'] === 'failed' && refundRow($lwFailed)['razorpay_refund_id'] === null);
+    check('exactly one refunded refund; order/payment refunded; code revoked; commission reversed; no gateway call', (int) val("SELECT COUNT(*) FROM refunds WHERE order_id = ? AND status = 'refunded'", [$lw['id']]) === 1 && val('SELECT status FROM orders WHERE id = ?', [$lw['id']]) === 'refunded' && val('SELECT status FROM payments WHERE order_id = ?', [$lw['id']]) === 'refunded' && val('SELECT status FROM access_codes WHERE order_id = ?', [$lw['id']]) === 'revoked' && val('SELECT status FROM commissions WHERE order_id = ?', [$lw['id']]) === 'reversed' && count($gw->calls) === $calls);
+    $before = snapshot($lw, $lwOpen);
+    check('replayed late webhook (failed one again) -> true, nothing changes', $svc->finalise($lwFailed, "rfnd_late_$tag", true) === true && snapshot($lw, $lwOpen) === $before);
+    $lf = paidOrder();
+    $lfId = (int) $svc->request($lf['uid'], $lf['id'], 'x')['refund']['id'];
+    $gw->next = 'throw';
+    $svc->approve($lfId, $ADMIN, null);
+    $gw->next = 'processed';
+    check('webhook finalise of a lone failed refund (NULL id) -> refunded, id stored', $svc->finalise($lfId, "rfnd_lone_$tag", true) === true && refundRow($lfId)['status'] === 'refunded' && refundRow($lfId)['razorpay_refund_id'] === "rfnd_lone_$tag" && val('SELECT status FROM orders WHERE id = ?', [$lf['id']]) === 'refunded');
+    $wr = paidOrder();
+    $wrId = (int) $svc->request($wr['uid'], $wr['id'], 'x')['refund']['id'];
+    check('webhook finalise of a requested refund -> refunded, order refunded, code revoked', $svc->finalise($wrId, "rfnd_req_$tag", true) === true && refundRow($wrId)['status'] === 'refunded' && val('SELECT status FROM orders WHERE id = ?', [$wr['id']]) === 'refunded' && val('SELECT status FROM access_codes WHERE order_id = ?', [$wr['id']]) === 'revoked');
+
+    // --- refund.failed: processing -> failed, nothing money-side; approve again retries ---
+    $mf = paidOrder('digital', true);
+    $mfId = (int) $svc->request($mf['uid'], $mf['id'], 'x')['refund']['id'];
+    $gw->next = 'pending';
+    $svc->approve($mfId, $ADMIN, null);
+    $gw->next = 'processed';
+    check('markFailed(processing) -> true, failed with note, refund id kept, order paid, code active, commission pending', $svc->markFailed($mfId) === true && refundRow($mfId)['status'] === 'failed' && refundRow($mfId)['admin_note'] !== null && refundRow($mfId)['razorpay_refund_id'] !== null && val('SELECT status FROM orders WHERE id = ?', [$mf['id']]) === 'paid' && val('SELECT status FROM access_codes WHERE order_id = ?', [$mf['id']]) === 'active' && val('SELECT status FROM commissions WHERE order_id = ?', [$mf['id']]) === 'pending');
+    check('markFailed again -> false; refund.failed audit row written', $svc->markFailed($mfId) === false && (int) val("SELECT COUNT(*) FROM audit_logs WHERE action = 'refund.failed' AND entity_type = 'refund' AND entity_id = ?", [$mfId]) === 1);
+    check('approve after a gateway-failed refund -> refunded', $svc->approve($mfId, $ADMIN, null)['status'] === 'refunded' && val('SELECT status FROM commissions WHERE order_id = ?', [$mf['id']]) === 'reversed');
+    check('markFailed on a refunded / requested refund -> false, unchanged', $svc->markFailed($mfId) === false && refundRow($mfId)['status'] === 'refunded' && $svc->markFailed($wrId) === false);
+
+    // --- two processes approving the same refund: one gateway call ---
+    $ca = paidOrder();
+    $caId = (int) $svc->request($ca['uid'], $ca['id'], 'x')['refund']['id'];
+    $log = sys_get_temp_dir() . "/refund_calls_$tag.log";
+    @unlink($log);
+    $db->beginTransaction();
+    q('SELECT id FROM refunds WHERE id = ? FOR UPDATE', [$caId]); // both children queue on the row lock
+    $procs = [];
+    for ($k = 0; $k < 2; $k++) {
+        $pipes = [];
+        $procs[] = [proc_open([PHP_BINARY, __DIR__ . '/helpers/refund_approve.php', (string) $caId, $log], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes), $pipes];
+    }
+    usleep(500000);
+    $db->rollBack();
+    $outs = [];
+    foreach ($procs as [$p, $pipes]) {
+        $outs[] = trim(stream_get_contents($pipes[1])) . trim(stream_get_contents($pipes[2]));
+        proc_close($p);
+    }
+    $logged = is_file($log) ? file($log, FILE_IGNORE_NEW_LINES) : [];
+    @unlink($log);
+    sort($outs);
+    // The loser may read `processing`: the winner commits it before finalising in a second transaction.
+    check('concurrent approves: gateway called once, loser is a no-op, one refunded row', $logged === ["refund_$caId"] && in_array($outs, [['processing', 'refunded'], ['refunded', 'refunded']], true) && refundRow($caId)['status'] === 'refunded' && (int) val("SELECT COUNT(*) FROM audit_logs WHERE action = 'refund.refunded' AND entity_type = 'refund' AND entity_id = ?", [$caId]) === 1, implode(',', $outs) . ' calls=' . count($logged));
+
     // --- admin-opened refunds ---
     $ao = paidOrder('digital', true);
     check('adminOpen: reason required', str_starts_with(attempt(fn () => $svc->adminOpen($ao['id'], $ADMIN, '')), 'validation_error|400|{"reason"'));

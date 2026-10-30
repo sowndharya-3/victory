@@ -58,6 +58,9 @@ class WebhookController
         if ($type === 'refund.processed') {
             return $this->refundProcessed($event['payload']['refund']['entity'] ?? null);
         }
+        if ($type === 'refund.failed') {
+            return $this->refundFailed($event['payload']['refund']['entity'] ?? null);
+        }
         $entity = $event['payload']['payment']['entity'] ?? null;
         if (!in_array($type, ['payment.captured', 'payment.failed'], true)) {
             return 'ignored';
@@ -122,9 +125,11 @@ class WebhookController
         $stmt->execute([$refundId, $paymentId]);
         $row = $stmt->fetch();
         if (!$row) {
+            // Prefer the order's open refund over an older failed one; `requested` covers a webhook that overtakes
+            // an in-flight approve (finalise waits on its row lock).
             $stmt = $db->prepare("SELECT r.id, r.amount FROM refunds r JOIN payments p ON p.id = r.payment_id
-                                   WHERE p.razorpay_payment_id = ? AND r.razorpay_refund_id IS NULL AND r.status IN ('approved', 'processing', 'failed')
-                                   ORDER BY r.id DESC LIMIT 1");
+                                   WHERE p.razorpay_payment_id = ? AND r.razorpay_refund_id IS NULL AND r.status IN ('requested', 'approved', 'processing', 'failed')
+                                   ORDER BY (r.is_open IS NULL), r.id DESC LIMIT 1");
             $stmt->execute([$paymentId]);
             $row = $stmt->fetch();
         }
@@ -137,7 +142,25 @@ class WebhookController
             error_log("razorpay webhook: refund.processed amount differs from refund {$row['id']} (refund_id={$refundId}, payment_id={$paymentId})");
             return 'ignored';
         }
-        return (new RefundService(GatewayFactory::make()))->finalise((int) $row['id'], $refundId) ? 'ok' : 'ignored';
+        return (new RefundService(GatewayFactory::make()))->finalise((int) $row['id'], $refundId, true) ? 'ok' : 'ignored';
+    }
+
+    /** Only a refund stored as pending (processing, refund id known) can fail later; nothing money-side changes. */
+    private function refundFailed(mixed $entity): string
+    {
+        $refundId = is_array($entity) && is_string($entity['id'] ?? null) ? $entity['id'] : '';
+        $paymentId = is_array($entity) && is_string($entity['payment_id'] ?? null) ? $entity['payment_id'] : '';
+        if ($refundId === '' || $paymentId === '') {
+            return 'ignored';
+        }
+        $stmt = Db::connection()->prepare('SELECT r.id FROM refunds r JOIN payments p ON p.id = r.payment_id WHERE r.razorpay_refund_id = ? AND p.razorpay_payment_id = ?');
+        $stmt->execute([$refundId, $paymentId]);
+        $id = $stmt->fetchColumn();
+        if ($id === false) {
+            error_log("razorpay webhook: refund.failed for unknown refund (refund_id={$refundId}, payment_id={$paymentId})");
+            return 'ignored';
+        }
+        return (new RefundService(GatewayFactory::make()))->markFailed((int) $id) ? 'ok' : 'ignored';
     }
 
     private function respond(string $status): void
