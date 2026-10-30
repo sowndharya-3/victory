@@ -14,6 +14,7 @@ use App\Controllers\AccessCodeController;
 use App\Controllers\TrackController;
 use App\Controllers\RefundController;
 use App\Controllers\AdminRefundController;
+use App\Controllers\ReaderController;
 
 $router->get('/api/health', [new HealthController(), 'check']);
 $router->post('/api/auth/register', [new AuthController(), 'register']);
@@ -22,6 +23,9 @@ $router->post('/api/admin/login', [new AdminController(), 'login']);
 $router->get('/api/me', [new MeController(), 'show']);
 $router->get('/api/books', [new BookController(), 'list']);
 $router->get('/api/books/{id}', [new BookController(), 'show']);
+$reader = new ReaderController(); // customer + non-revoked book_access; the PDF itself has no route
+$router->get('/api/books/{id}/access', [$reader, 'access']);
+$router->get('/api/books/{id}/read/pages/{n}', [$reader, 'page']);
 
 $adminBooks = new AdminBookController();
 $router->get('/api/admin/books', [$adminBooks, 'list']);

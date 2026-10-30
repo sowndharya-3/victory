@@ -43,11 +43,11 @@ Apply the initial schema against the running stack:
 
 ```bash
 docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/001_init.sql
-# then 002_book_management.sql, 003_orders_payments.sql and 004_refunds.sql, in order
+# then 002_book_management.sql, 003_orders_payments.sql, 004_refunds.sql and 005_books_page_count.sql, in order
 ```
 
 Migrations are one-shot: re-applying a file fails on "already exists" /
-duplicate column and changes no data. 003 and 004 are additive only; never drop the
+duplicate column and changes no data. 003, 004 and 005 are additive only; never drop the
 volume to re-run them.
 
 ## API endpoints
@@ -95,6 +95,8 @@ volume to re-run them.
 | POST | /api/admin/refunds/:id/approve | admin | `{note?}` → `{refund}` `refunded` (gateway processed) or `processing` (finalised by the `refund.processed` webhook); idempotent once processing/refunded. 404, 409 `invalid_transition` (rejected) / `not_refundable` / `refund_conflict`, 502 `gateway_error` (refund left `failed`; approve again retries) |
 | POST | /api/admin/refunds/:id/reject | admin | `{note}` required (1–500) → `{refund}` `rejected`; 409 `invalid_transition` once processing/refunded |
 | POST | /api/admin/orders/:id/refund | admin | `{reason}` → 201 `{refund}` opened as `approved` and processed at once; 200 with the existing refund if one is open (an open customer request is approved). 404, 409 `not_refundable`, 502 `gateway_error` |
+| GET | /api/books/:id/access | customer | `{owned, status: "active" / "revoked" / "none", pageCount?}` (`pageCount` only when active; `Cache-Control: private, no-store`). 404 `not_found` (id not plain digits), 500 `render_failed` |
+| GET | /api/books/:id/read/pages/:n | customer + active `book_access` | `image/jpeg` page `n` (1..pageCount), `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`. 403 `forbidden` (no or revoked access; admins too), 404 `not_found` (bad id / page out of range), 429 `rate_limited` (240 per 5 min per user), 500 `render_failed` |
 
 Access codes are stored as HMAC-SHA256 (pepper from `CODE_SECRET`) plus last 4 chars; the plaintext is kept
 AES-256-GCM-encrypted (order id as AAD, so a blob copied to another order won't decrypt) only until redeemed. Rotating `CODE_SECRET` invalidates every unredeemed code.
@@ -108,9 +110,11 @@ set; hard copy: fulfilment `cancelled` unless already shipped/out for delivery/d
 `refund.already_shipped` audit row); commission `pending`/`payable` → `reversed`, `paid` stays paid with
 `clawback_due=1`. A refunded order is never re-fulfilled. Every admin action writes `audit_logs` (`entity_type='refund'`).
 
+Secure reader: the PDF stays in `storage/books/{id}/book.pdf` (outside the web root, no route; nginx also 404s `/uploads/books/*/book.pdf` and `/uploads/books/*/pages/`). Pages are rendered lazily with Poppler (`poppler-utils`: `pdfinfo`, `pdftoppm -jpeg -r 110`, argument-array `proc_open`, 30 s timeout, per-page `flock`, temp file + atomic rename) into `storage/books/{id}/pages/{n}.jpg`; the page count is cached in `books.page_count`. A new PDF upload clears both. Render errors return a generic `render_failed` (ids and exit code logged, never paths or stderr). Access = a non-revoked `book_access` row for the caller; a book later unpublished/archived stays readable by its owners. The public index/preview images are unchanged SP-4 uploads and never include reader pages. Production image needs `poppler-utils`.
+
 Common error shape: `{"error":{"code":"...","message":"...","fields"?:{...}}}`. Other codes seen across
 the API: `unauthorized` 401, `forbidden` 403 (wrong role), `not_found` 404, `validation_error` 400,
-`rate_limited` 429, `server_error` 500 (generic body; the class and message are written to the PHP error log).
+`rate_limited` 429, `render_failed` 500 (reader), `server_error` 500 (generic body; the class and message are written to the PHP error log).
 
 ### Razorpay webhook setup
 
@@ -164,6 +168,6 @@ full test run:
 - `backend/tests/jwt_test.php` + `backend/tests/http_test.sh` — auth/health foundation
 - `backend/tests/upload_validator_test.php` + `backend/tests/book_test.sh` — book management (create → publish → cover/index/preview-pages/PDF uploads → public response shape/privacy → edit/unpublish/archive → role separation → invalid-file rejection)
 
-- `backend/tests/{money_pricing,address_validator,signature_gateway,order_fulfillment,codes,reconciler,race,middleware,refund}_test.php` + `backend/tests/order_test.sh` — SP-5 orders, Razorpay, access codes, tracking, reconcile, refunds (run the PHP ones with `docker compose exec -T php php tests/<file>.php`)
+- `backend/tests/{money_pricing,address_validator,signature_gateway,order_fulfillment,codes,reconciler,race,middleware,refund,reader}_test.php` + `backend/tests/order_test.sh` — SP-5 orders, Razorpay, access codes, tracking, reconcile, refunds, secure reader (run the PHP ones with `docker compose exec -T php php tests/<file>.php`)
 
 Re-run any of them against a live `docker compose up` stack any time to re-verify.

@@ -5,6 +5,7 @@ namespace App\Controllers;
 use App\Database\Db;
 use App\Http\ApiException;
 use App\Middleware\AuthMiddleware;
+use App\Reader\PdfPageRenderer;
 use App\Upload\FileValidator;
 use App\Validation\Validator;
 
@@ -172,6 +173,7 @@ class AdminBookController
         }
         Db::connection()->prepare('UPDATE books SET digital_file_path = :path WHERE id = :id')
             ->execute(['path' => $destination, 'id' => $id]);
+        PdfPageRenderer::invalidate($bookId); // stale page count / pages belong to the old PDF
         echo json_encode(['pdfUploaded' => true]);
     }
 

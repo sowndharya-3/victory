@@ -126,3 +126,16 @@ Additional checks:
   and `order_test.sh` passed again (132/132).
 - Test data: `order_test.sh` cleans up after itself. The SP-4 `book_test.sh`/`http_test.sh` leave an archived book and test users per run
   by design; the ones created during this run were deleted.
+
+## Task 17: Secure reader backend
+
+Run date: 2026-10-30, after migration 005 and the php image rebuild with `poppler-utils` 20.09 (`pdftoppm -v`, `pdfinfo -v` OK in the container).
+
+| Suite | Result |
+|---|---|
+| reader_test.php (new) | 33 passed, 0 failed (id parsing, pageCount vs pdfinfo + cache, JPEG magic, cache reuse with mtime unchanged, range 404s, 3 concurrent renders, invalidate, missing/corrupt PDF -> `render_failed` without paths/stderr) |
+| order_test.sh | 190 passed, 0 failed (177 + §8: real book 2 redeemed -> page JPEG + headers, 401/403/404, direct private paths 404, 241st call 429 per user, refund -> `revoked` + 403) |
+| refund 69, reconciler 25, codes 56, order_fulfillment 27, money_pricing 14, signature_gateway 27, address_validator 14, middleware 5, jwt 6, upload_validator 3, race 1 | all passed, 0 failed |
+| book_test.sh / http_test.sh | 25/25, 23/23 |
+
+Books 1 and 2: `/api/books`, `/api/books/1`, `/api/books/2` responses and both PDFs md5-identical before/after. Test rows removed (book_test/http_test leftovers of this run too); book 2's page cache (`storage/books/2/pages`, gitignored) left in place.

@@ -48,6 +48,19 @@ cleanup() {
          DELETE FROM orders WHERE book_id=$BOOK_ID;
          DELETE FROM book_preview_pages WHERE book_id=$BOOK_ID; DELETE FROM books WHERE id=$BOOK_ID;"
   fi
+  # Section 8 orders the real book 2: remove every row hanging off test users, whatever the book.
+  TU="SELECT id FROM users WHERE email LIKE 'ordertest-%@example.com'"
+  TO="SELECT id FROM orders WHERE user_id IN ($TU)"
+  sql "DELETE FROM audit_logs WHERE user_id IN ($TU) OR (entity_type='refund' AND entity_id IN (SELECT id FROM refunds WHERE order_id IN ($TO)))
+         OR (entity_type='access_code' AND entity_id IN (SELECT id FROM access_codes WHERE order_id IN ($TO)));
+       DELETE FROM refunds WHERE order_id IN ($TO);
+       DELETE FROM access_codes WHERE order_id IN ($TO);
+       DELETE FROM commissions WHERE order_id IN ($TO);
+       DELETE FROM payments WHERE order_id IN ($TO);
+       DELETE FROM hardcopy_addresses WHERE order_id IN ($TO);
+       DELETE FROM book_access WHERE user_id IN ($TU);
+       DELETE FROM orders WHERE user_id IN ($TU);
+       DELETE FROM rate_limits WHERE bucket LIKE 'reader-page:%' AND SUBSTRING_INDEX(bucket,':',-1) IN ($TU);"
   sql "DELETE FROM rate_limits WHERE bucket LIKE 'order-create:%' AND SUBSTRING_INDEX(bucket,':',-1) IN (SELECT id FROM users WHERE email LIKE 'ordertest-%@example.com');
        DELETE FROM users WHERE email LIKE 'ordertest-%@example.com';
        DELETE FROM referral_partners WHERE referral_code IN ('VTP-TEST01','VTP-TEST02');"
@@ -624,6 +637,71 @@ new_order "$TOKEN_J" "$ADDR2"; JP=$NID
 post_json "$ADMIN_TOKEN" "/api/admin/orders/$JP/refund" '{"reason":"x"}'
 check "admin open refund on a pending order -> 409 not_refundable" "$([ "$PCODE" = "409" ] && jh "$P" '"code":"not_refundable"' && echo true || echo false)"
 check "no refund response leaks a plaintext code or code_enc" "$(! grep -q "${JCODE:0:9}" "$TMP/p.json" && [ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE entity_type='refund' AND CAST(detail AS CHAR) LIKE '%${JCODE:0:4}%${JCODE:5:4}%'")" = "0" ] && echo true || echo false)"
+
+echo "=== 8. Secure reader (real book 2) ==="
+RB=2
+hdr_get() { # $1 token $2 path -> RCODE, headers in $TMP/r.h, body in $TMP/r.bin
+  RCODE=$(curl -s -D "$TMP/r.h" -o "$TMP/r.bin" -w '%{http_code}' "$BASE_URL$2" ${1:+-H "Authorization: Bearer $1"})
+}
+hdr() { grep -i "^$1:" "$TMP/r.h" | head -1 | cut -d: -f2- | tr -d '\r' | sed 's/^ *//'; }
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'code-redeem-%';"
+read -r TOKEN_L UID_L <<<"$(register "ordertest-l-$STAMP@example.com")"
+read -r TOKEN_M UID_M <<<"$(register "ordertest-m-$STAMP@example.com")"
+sql "DELETE FROM rate_limits WHERE bucket IN ('order-create:$UID_L','order-create:$UID_M');"
+paid_order "$TOKEN_L" "{\"bookId\":$RB,\"purchaseType\":\"digital\"}"; LD=$NID
+get_json "$TOKEN_L" "/api/me/orders/$LD/access-code"
+post_json "$TOKEN_L" "/api/me/redeem" "{\"code\":\"$(code_of "$G")\"}"
+check "section 8: book 2 digital order paid and code redeemed" "$([ "$VCODE" = "200" ] && [ "$PCODE" = "200" ] && [ "$(sql "SELECT revoked_at IS NULL FROM book_access WHERE user_id=$UID_L AND book_id=$RB")" = "1" ] && echo true || echo false)"
+
+get_json "$TOKEN_L" "/api/books/$RB/access"
+PAGES=$(echo "$G" | grep -o '"pageCount":[0-9]*' | grep -o '[0-9]*$')
+check "access: owner -> {owned:true,status:active,pageCount>0}" "$([ "$GCODE" = "200" ] && jh "$G" '^\{"owned":true,"status":"active","pageCount":[1-9][0-9]*\}$' && echo true || echo false)"
+check "access: pageCount equals pdfinfo of the private PDF" "$([ "$PAGES" = "$(docker compose exec -T php pdfinfo storage/books/$RB/book.pdf 2>/dev/null | grep '^Pages:' | grep -o '[0-9]*')" ] && echo true || echo false)"
+get_json "$TOKEN_M" "/api/books/$RB/access"; G1=$G; C1=$GCODE
+get_json "" "/api/books/$RB/access"; C2=$GCODE
+get_json "$ADMIN_TOKEN" "/api/books/$RB/access"
+check "access: non-owner {owned:false,status:none}; no token 401; admin 403" "$([ "$C1" = "200" ] && [ "$G1" = '{"owned":false,"status":"none"}' ] && [ "$C2" = "401" ] && [ "$GCODE" = "403" ] && echo true || echo false)"
+
+hdr_get "$TOKEN_L" "/api/books/$RB/read/pages/1"
+check "owner page 1 -> 200 image/jpeg, body starts FF D8 FF" "$([ "$RCODE" = "200" ] && [ "$(hdr Content-Type)" = "image/jpeg" ] && [ "$(head -c 3 "$TMP/r.bin" | od -An -tx1 | tr -d ' \n')" = "ffd8ff" ] && echo true || echo false)"
+check "page headers: Cache-Control private, no-store; nosniff" "$([ "$(hdr Cache-Control)" = "private, no-store" ] && [ "$(hdr X-Content-Type-Options)" = "nosniff" ] && echo true || echo false)"
+hdr_get "$TOKEN_L" "/api/books/$RB/read/pages/$PAGES"
+check "owner last page ($PAGES) -> 200 image/jpeg" "$([ "$RCODE" = "200" ] && [ "$(hdr Content-Type)" = "image/jpeg" ] && echo true || echo false)"
+hdr_get "$TOKEN_M" "/api/books/$RB/read/pages/1"; C1=$RCODE; B1=$(cat "$TMP/r.bin")
+hdr_get "" "/api/books/$RB/read/pages/1"; C2=$RCODE
+hdr_get "$ADMIN_TOKEN" "/api/books/$RB/read/pages/1"
+check "page: non-owner 403 forbidden, no token 401, admin 403" "$([ "$C1" = "403" ] && jh "$B1" '"code":"forbidden"' && [ "$C2" = "401" ] && [ "$RCODE" = "403" ] && echo true || echo false)"
+CODES=""
+for p in 0 $((PAGES + 1)) abc "1%3Bls" -1 99999999999; do hdr_get "$TOKEN_L" "/api/books/$RB/read/pages/$p"; CODES="$CODES $RCODE"; done
+hdr_get "$TOKEN_L" "/api/books/2abc/read/pages/1"; CODES="$CODES $RCODE"
+check "page 0, N+1, abc, 1;ls, -1, huge, bad book id -> 404" "$([ "$CODES" = " 404 404 404 404 404 404 404" ] && echo true || echo false)"
+
+CODES=""
+for p in /storage/books/$RB/book.pdf /storage/books/$RB/pages/1.jpg /uploads/books/$RB/book.pdf /uploads/books/$RB/pages/1.jpg /books/$RB/book.pdf /api/books/$RB/book.pdf /api/books/$RB/pdf "/uploads/books/$RB/../../../storage/books/$RB/book.pdf"; do
+  hdr_get "" "$p"; CODES="$CODES $RCODE"
+  head -c 4 "$TMP/r.bin" | grep -q '%PDF' && CODES="$CODES PDF"
+  [ "$(head -c 3 "$TMP/r.bin" | od -An -tx1 | tr -d ' \n')" = "ffd8ff" ] && CODES="$CODES JPEG"
+done
+check "direct private paths -> 404, never PDF or page bytes" "$([ "$CODES" = " 404 404 404 404 404 404 404 404" ] && echo true || echo false)"
+get_json "" "/api/books/$RB"
+check "public book payload unchanged: no pageCount, previews/index stay public uploads, no reader pages" "$([ "$GCODE" = "200" ] && ! jh "$G" 'pageCount|storage|/read/pages|book\.pdf' && echo true || echo false)"
+
+# Rate limit: 240 page calls per user per fixed 5-min window; avoid straddling the boundary.
+INTO=$(( $(date +%s) % 300 )); [ "$INTO" -gt 240 ] && sleep $((301 - INTO))
+sql "DELETE FROM rate_limits WHERE bucket='reader-page:$UID_L';"
+ARGS=(); for i in $(seq 1 240); do ARGS+=(-o /dev/null "$BASE_URL/api/books/$RB/read/pages/1"); done
+BURST=$(curl -s -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN_L" "${ARGS[@]}" | sort | uniq -c | tr -s ' ' | sed 's/^ //')
+hdr_get "$TOKEN_L" "/api/books/$RB/read/pages/1"; C1=$RCODE; B1=$(cat "$TMP/r.bin")
+hdr_get "$TOKEN_M" "/api/books/$RB/read/pages/1"
+check "240 page calls -> 200, 241st -> 429 rate_limited; other user (same IP) unaffected" "$([ "$BURST" = "240 200" ] && [ "$C1" = "429" ] && jh "$B1" '"code":"rate_limited"' && [ "$RCODE" = "403" ] && echo true || echo false)"
+sql "DELETE FROM rate_limits WHERE bucket='reader-page:$UID_L';"
+
+# Revoked: refund the book 2 order (finalised by admin approve) -> reader 403
+post_json "$TOKEN_L" "/api/me/orders/$LD/refund-request" '{"reason":"reader test"}'; RFL=$(id_of "$P")
+post_json "$ADMIN_TOKEN" "/api/admin/refunds/$RFL/approve" '{}'
+get_json "$TOKEN_L" "/api/books/$RB/access"
+hdr_get "$TOKEN_L" "/api/books/$RB/read/pages/1"
+check "after refund: access {owned:false,status:revoked}, page 403 forbidden" "$(jh "$P" '"status":"refunded"' && [ "$G" = '{"owned":false,"status":"revoked"}' ] && [ "$RCODE" = "403" ] && grep -q '"code":"forbidden"' "$TMP/r.bin" && echo true || echo false)"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
