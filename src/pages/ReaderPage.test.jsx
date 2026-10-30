@@ -1,108 +1,54 @@
-import { useEffect } from 'react'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { SessionProvider, useSession } from '../context/SessionContext'
+import { vi } from 'vitest'
+import { SessionProvider } from '../context/SessionContext'
 import ReaderPage from './ReaderPage'
+import { fetchAccess, fetchPageBlobUrl } from '../api/reader'
+import { fetchBook } from '../api/books'
 
-// Test-only seeding wrapper: SessionProvider has no preloadedState prop, so we
-// drive real reducer actions via useSession() until a paid order matching
-// {bookId, purchaseType, customerEmail} exists, then render children.
-function SeedPaidOrder({ email, bookId, purchaseType, children }) {
-  const { state, dispatch } = useSession()
-  const order = state.orders.find(
-    o => o.bookId === bookId && o.purchaseType === purchaseType && o.customerEmail === email
-  )
+vi.mock('../api/reader')
+vi.mock('../api/books')
 
-  useEffect(() => {
-    if (state.customerEmail !== email) {
-      dispatch({ type: 'LOGIN_CUSTOMER', payload: { email } })
-    } else if (!order) {
-      dispatch({ type: 'CREATE_ORDER', payload: { bookId, purchaseType, customerEmail: email } })
-    } else if (order.paymentStatus !== 'paid') {
-      dispatch({ type: 'MARK_ORDER_PAID', payload: { orderId: order.id } })
-    }
-  })
-
-  const ready = state.customerEmail === email && order?.paymentStatus === 'paid'
-  return ready ? children : null
-}
-
-test('blocks access when book was not purchased', () => {
-  render(
+function renderPage() {
+  return render(
     <SessionProvider>
-      <MemoryRouter initialEntries={['/read/b1']}>
+      <MemoryRouter initialEntries={['/read/7']}>
         <Routes><Route path="/read/:bookId" element={<ReaderPage />} /></Routes>
       </MemoryRouter>
     </SessionProvider>
   )
-  expect(screen.getByText(/you don't have access/i)).toBeInTheDocument()
-})
-
-test('blocks access when a paid order exists but purchaseType does not match', () => {
-  render(
-    <SessionProvider>
-      <SeedPaidOrder email="buyer@example.com" bookId="b1" purchaseType="hardcopy">
-        <MemoryRouter initialEntries={['/read/b1']}>
-          <Routes><Route path="/read/:bookId" element={<ReaderPage />} /></Routes>
-        </MemoryRouter>
-      </SeedPaidOrder>
-    </SessionProvider>
-  )
-  expect(screen.getByText(/you don't have access/i)).toBeInTheDocument()
-})
-
-// Seeds a paid order for one customer (never logging in as them) while the
-// CURRENT session logs in as a different customer — proving the reader
-// checks order ownership against the logged-in customer, not just any order.
-function SeedPaidOrderForOtherCustomer({ orderEmail, sessionEmail, bookId, purchaseType, children }) {
-  const { state, dispatch } = useSession()
-  const order = state.orders.find(
-    o => o.bookId === bookId && o.purchaseType === purchaseType && o.customerEmail === orderEmail
-  )
-
-  useEffect(() => {
-    if (!order) {
-      dispatch({ type: 'CREATE_ORDER', payload: { bookId, purchaseType, customerEmail: orderEmail } })
-    } else if (order.paymentStatus !== 'paid') {
-      dispatch({ type: 'MARK_ORDER_PAID', payload: { orderId: order.id } })
-    } else if (state.customerEmail !== sessionEmail) {
-      dispatch({ type: 'LOGIN_CUSTOMER', payload: { email: sessionEmail } })
-    }
-  })
-
-  const ready = order?.paymentStatus === 'paid' && state.customerEmail === sessionEmail
-  return ready ? children : null
 }
 
-test('blocks access when the paid digital order belongs to a different customer', () => {
-  render(
-    <SessionProvider>
-      <SeedPaidOrderForOtherCustomer
-        orderEmail="other-customer@example.com"
-        sessionEmail="buyer@example.com"
-        bookId="b1"
-        purchaseType="digital"
-      >
-        <MemoryRouter initialEntries={['/read/b1']}>
-          <Routes><Route path="/read/:bookId" element={<ReaderPage />} /></Routes>
-        </MemoryRouter>
-      </SeedPaidOrderForOtherCustomer>
-    </SessionProvider>
-  )
-  expect(screen.getByText(/you don't have access/i)).toBeInTheDocument()
+beforeEach(() => {
+  URL.revokeObjectURL = vi.fn()
+  localStorage.setItem('vtee-auth-token', 'tok')
+  fetchBook.mockResolvedValue({ id: 7, title: 'Success Mantra', indexUrl: null })
+  fetchPageBlobUrl.mockImplementation((t, b, p) => Promise.resolve(`blob:page-${p}`))
 })
 
-test('grants access when a paid digital order matches book and customer', () => {
-  render(
-    <SessionProvider>
-      <SeedPaidOrder email="buyer@example.com" bookId="b1" purchaseType="digital">
-        <MemoryRouter initialEntries={['/read/b1']}>
-          <Routes><Route path="/read/:bookId" element={<ReaderPage />} /></Routes>
-        </MemoryRouter>
-      </SeedPaidOrder>
-    </SessionProvider>
-  )
-  expect(screen.queryByText(/you don't have access/i)).not.toBeInTheDocument()
-  expect(screen.getByText(/Licensed to buyer@example.com/)).toBeInTheDocument()
-  expect(screen.getByAltText('Page 1')).toBeInTheDocument()
+afterEach(() => vi.resetAllMocks())
+
+test('without a token asks to log in and calls nothing', () => {
+  localStorage.removeItem('vtee-auth-token')
+  renderPage()
+  expect(screen.getByRole('link', { name: /log in/i })).toHaveAttribute('href', '/account')
+  expect(fetchAccess).not.toHaveBeenCalled()
+})
+
+test('not owned shows no-access links and never fetches pages', async () => {
+  fetchAccess.mockResolvedValue({ owned: false, status: 'none' })
+  renderPage()
+  expect(await screen.findByText(/you don't have access/i)).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: /go to my books/i })).toHaveAttribute('href', '/my-books')
+  expect(screen.getByRole('link', { name: /view this book/i })).toHaveAttribute('href', '/books/7')
+  expect(fetchPageBlobUrl).not.toHaveBeenCalled()
+})
+
+test('owned shows the viewer at page 1', async () => {
+  fetchAccess.mockResolvedValue({ owned: true, status: 'active', pageCount: 12 })
+  renderPage()
+  expect(await screen.findByAltText('Page 1 of 12')).toBeInTheDocument()
+  expect(screen.getByText('Page 1 of 12')).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'Success Mantra' })).toBeInTheDocument()
+  expect(fetchAccess).toHaveBeenCalledWith('tok', '7')
 })

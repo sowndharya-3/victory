@@ -1,41 +1,53 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { useSession } from '../context/SessionContext'
+import { fetchAccess } from '../api/reader'
+import { fetchBook } from '../api/books'
 import Header from '../components/home/Header'
+import ReaderViewer from '../components/reader/ReaderViewer'
+
+function Shell({ children }) {
+  return <><Header /><div className="container" style={{ padding: '2rem 0' }}>{children}</div></>
+}
 
 function ReaderPage() {
   const { bookId } = useParams()
   const { state } = useSession()
-  const book = state.books.find(b => b.id === bookId)
-  const order = state.orders.find(
-    o => o.bookId === bookId && o.purchaseType === 'digital' && o.paymentStatus === 'paid' && o.customerEmail === state.customerEmail
-  )
-  const [page, setPage] = useState(0)
+  const token = localStorage.getItem('vtee-auth-token')
+  const [access, setAccess] = useState(null)
+  const [book, setBook] = useState(null)
+  const [loadError, setLoadError] = useState('')
 
   useEffect(() => {
-    const blockContextMenu = (e) => e.preventDefault()
-    document.addEventListener('contextmenu', blockContextMenu)
-    return () => document.removeEventListener('contextmenu', blockContextMenu)
-  }, [])
+    if (!token) return undefined
+    let cancelled = false
+    // Owners keep reading unpublished books, so a failed public book lookup is not fatal.
+    Promise.all([fetchAccess(token, bookId), fetchBook(bookId).catch(() => null)])
+      .then(([a, b]) => { if (!cancelled) { setAccess(a); setBook(b) } })
+      .catch(err => { if (!cancelled) setLoadError(err.message) })
+    return () => { cancelled = true }
+  }, [token, bookId])
 
-  if (!book) return <><Header /><div className="container">Book not found.</div></>
-  if (!order) return <><Header /><div className="container">You don't have access to this book. Please purchase it first.</div></>
+  if (!token) return <Shell><p><Link to="/account">Log in to read this book</Link></p></Shell>
+  if (loadError) return <Shell><p role="alert" className="form-error">{loadError}</p></Shell>
+  if (!access) return <Shell><p aria-live="polite">Loading…</p></Shell>
 
-  const totalPages = book.pageImages.length
+  if (!access.owned) {
+    return (
+      <Shell>
+        <p>You don't have access to this book{access.status === 'revoked' ? ' (access was revoked)' : ''}.</p>
+        <p><Link to="/my-books">Go to My Books</Link> · <Link to={`/books/${bookId}`}>View this book</Link></p>
+      </Shell>
+    )
+  }
+
+  if (!access.pageCount) return <Shell><p>This book is not available to read yet. Please try again later.</p></Shell>
 
   return (
-    <>
-      <Header />
-      <div className="container reader" style={{ userSelect: 'none', textAlign: 'center' }}>
-        <div className="reader-watermark">Licensed to {state.customerEmail} — Order {order.id}</div>
-        <img src={book.pageImages[page]} alt={`Page ${page + 1}`} style={{ maxWidth: '100%' }} />
-        <div className="reader-controls">
-          <button disabled={page === 0} onClick={() => setPage(p => p - 1)}>Previous</button>
-          <span>Page {page + 1} of {totalPages}</span>
-          <button disabled={page === totalPages - 1} onClick={() => setPage(p => p + 1)}>Next</button>
-        </div>
-      </div>
-    </>
+    <Shell>
+      {book?.title && <h2>{book.title}</h2>}
+      <ReaderViewer token={token} bookId={bookId} pageCount={access.pageCount} book={book} email={state.customerEmail} />
+    </Shell>
   )
 }
 
