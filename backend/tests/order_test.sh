@@ -66,6 +66,12 @@ cleanup() {
   sql "DELETE FROM rate_limits WHERE bucket LIKE 'order-create:%' AND SUBSTRING_INDEX(bucket,':',-1) IN (SELECT id FROM users WHERE email LIKE 'ordertest-%@example.com');
        DELETE FROM users WHERE email LIKE 'ordertest-%@example.com';
        DELETE FROM referral_partners WHERE referral_code IN ('VTP-TEST01','VTP-TEST02');"
+  # Section 10: settings back to their prior values, its audit rows, applications and the partners approved from them.
+  [ -n "${SAVED_SQL:-}" ] && sql "$SAVED_SQL"
+  [ -n "${AUDIT0:-}" ] && sql "DELETE FROM audit_logs WHERE id > $AUDIT0 AND entity_type IN ('settings','referral_application','referral_partner','commission');"
+  sql "DELETE FROM referral_partners WHERE application_id IN (SELECT id FROM referral_applications WHERE gmail LIKE 'reftest-%@example.com');
+       DELETE FROM referral_applications WHERE gmail LIKE 'reftest-%@example.com';
+       DELETE FROM rate_limits WHERE bucket LIKE 'referral-apply:%';"
 }
 trap cleanup EXIT
 
@@ -889,6 +895,128 @@ BURST=$(for i in $(seq 1 31); do post_json "$ADMIN_TOKEN" "/api/admin/codes/veri
 check "admin verify: 30 per 10 min -> 31st 429" "$([ "$BURST" = "30 404 1 429 " ] && echo true || echo false)"
 sql "DELETE FROM rate_limits WHERE bucket LIKE 'admin-code-%';"
 
+
+echo "=== 10. Referral partners and commissions ==="
+AUDIT0=$(sql "SELECT COALESCE(MAX(id),0) FROM audit_logs")
+# Restored by cleanup() whatever happens: every rate/pricing setting as it was before this section.
+SAVED_SQL=$(sql "SELECT GROUP_CONCAT(CONCAT('UPDATE settings SET \`value\`=', QUOTE(\`value\`), ' WHERE \`key\`=', QUOTE(\`key\`)) SEPARATOR '; ') FROM settings WHERE \`key\` LIKE 'commission_rate_%' OR \`key\` LIKE 'shipping_charge_%' OR \`key\` LIKE 'gst_%'")
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'referral-apply:%' OR bucket LIKE 'referral-validate:%';"
+RG="reftest-$STAMP"
+app_post() { # $1 json -> ACODE, A
+  ACODE=$(curl -s -o "$TMP/a.json" -w '%{http_code}' -X POST "$BASE_URL/api/referral/applications" -H "Content-Type: application/json" -d "$1"); A=$(cat "$TMP/a.json")
+}
+app_json() { # $1 gmail [$2 name]
+  echo "{\"name\":\"${2:-Ref Test}\",\"qualification\":\"B.Ed\",\"place\":\"Madurai\",\"district\":\"Madurai\",\"status\":\"Faculty\",\"phone\":\"+91 98765-43210\",\"whatsapp\":\"9876543211\",\"upiId\":\"reftest@okaxis\",\"gmail\":\"$1\"}"
+}
+apps_of() { sql "SELECT COUNT(*) FROM referral_applications WHERE gmail LIKE '$RG%'"; }
+
+# Applications (public)
+app_post '{}'
+check "application: empty body -> 400 naming name, status, phone, whatsapp, gmail" "$([ "$ACODE" = "400" ] && jh "$A" '"code":"validation_error"' && jh "$A" '"name"' && jh "$A" '"status"' && jh "$A" '"phone"' && jh "$A" '"whatsapp"' && jh "$A" '"gmail"' && echo true || echo false)"
+app_post '{"name":"X","status":"Teacher","phone":"12345","whatsapp":"98765","gmail":"not-an-email","upiId":"bad upi id"}'
+check "application: bad status/phone/whatsapp/gmail/upiId each named" "$([ "$ACODE" = "400" ] && jh "$A" '"status":' && jh "$A" '"phone":' && jh "$A" '"whatsapp":' && jh "$A" '"gmail":' && jh "$A" '"upiId":' && echo true || echo false)"
+app_post "$(app_json "$RG-long@example.com" "$(printf 'N%.0s' $(seq 1 151))")"; L1=$ACODE; L1B=$A
+app_post '["x"]'
+check "application: 151-char name -> fields.name; non-object body -> 400; nothing stored" "$([ "$L1" = "400" ] && jh "$L1B" '"fields":\{"name"' && [ "$ACODE" = "400" ] && [ "$(apps_of)" = "0" ] && echo true || echo false)"
+app_post "$(app_json "$RG-1@Example.com")"; A1=$(jget "$A" id)
+check "application: valid -> 201 pending; phone normalised, gmail lowercased" "$([ "$ACODE" = "201" ] && jh "$A" '"applicationStatus":"pending"' && [ "$(sql "SELECT CONCAT_WS('|',phone,whatsapp,gmail,upi_id,status,application_status) FROM referral_applications WHERE id=${A1:-0}")" = "9876543210|9876543211|$RG-1@example.com|reftest@okaxis|Faculty|pending" ] && echo true || echo false)"
+app_post "$(app_json "$RG-2@example.com")"; A2=$(jget "$A" id); A2CODE=$ACODE
+app_post "$(app_json "$RG-1@EXAMPLE.com")"
+check "application: second valid 201; duplicate pending gmail -> 409 duplicate_application" "$([ "$A2CODE" = "201" ] && [ "$ACODE" = "409" ] && jh "$A" '"code":"duplicate_application"' && [ "$(apps_of)" = "2" ] && echo true || echo false)"
+# 5 / hour per IP (fixed hour window; avoid straddling the boundary)
+INTO=$(( $(date +%s) % 3600 )); [ "$INTO" -gt 3560 ] && sleep $((3601 - INTO))
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'referral-apply:%';"
+BURST=$(for i in 1 2 3 4 5 6; do app_post "$(app_json "$RG-rl$i@example.com")"; echo "$ACODE"; done | sort | uniq -c | tr -s ' ' | sed 's/^ //' | tr '\n' ' ')
+check "application: 5 per hour per IP -> 6th 429" "$([ "$BURST" = "5 201 1 429 " ] && [ "$(apps_of)" = "7" ] && echo true || echo false)"
+check "application: X-Forwarded-For does not reset the limit" "$([ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/referral/applications" -H 'X-Forwarded-For: 10.9.8.7' -H "Content-Type: application/json" -d "$(app_json "$RG-xff@example.com")")" = "429" ] && echo true || echo false)"
+
+# Admin review
+get_json "$ADMIN_TOKEN" "/api/admin/referrals?status=pending&perPage=100"
+check "admin referrals: pending list has both applications + partners array" "$([ "$GCODE" = "200" ] && jh "$G" "\"id\":$A1,\"name\":\"Ref Test\"" && jh "$G" "\"id\":$A2," && jh "$G" '"partners":\[' && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/referrals?status=bogus"; S1=$GCODE
+get_json "$TOKEN_A" "/api/admin/referrals"
+check "admin referrals: bad status 400; customer token 403" "$([ "$S1" = "400" ] && [ "$GCODE" = "403" ] && echo true || echo false)"
+
+post_json "$ADMIN_TOKEN" "/api/admin/referrals/$A1/approve" '{}'
+CODE1=$(echo "$P" | grep -o '"referralCode":"[^"]*"' | cut -d'"' -f4)
+PID1=$(echo "$P" | grep -o '"partner":{"id":[0-9]*' | grep -o '[0-9]*$')
+check "approve -> 200 partner with VTP- + 6 Crockford code" "$([ "$PCODE" = "200" ] && echo "$CODE1" | grep -Eq '^VTP-[0-9A-HJKMNP-TV-Z]{6}$' && [ -n "$PID1" ] && echo true || echo false)"
+check "approve: application approved + reviewed_at; partner row copied, active" "$([ "$(sql "SELECT CONCAT_WS('|',a.application_status,a.reviewed_at IS NOT NULL,p.application_id,p.active,p.gmail,p.phone,p.upi_id) FROM referral_applications a JOIN referral_partners p ON p.application_id=a.id WHERE a.id=$A1")" = "approved|1|$A1|1|$RG-1@example.com|9876543210|reftest@okaxis" ] && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/admin/referrals/$A1/approve" '{}'; S1="$PCODE $(jh "$P" '"code":"invalid_transition"' && echo y)"
+post_json "$ADMIN_TOKEN" "/api/admin/referrals/$A1/reject" '{}'; S2="$PCODE $(jh "$P" '"code":"invalid_transition"' && echo y)"
+post_json "$ADMIN_TOKEN" "/api/admin/referrals/999999999/approve" '{}'
+check "approve twice / reject approved -> 400 invalid_transition, still one partner; unknown 404" "$([ "$S1" = "400 y" ] && [ "$S2" = "400 y" ] && [ "$PCODE" = "404" ] && [ "$(sql "SELECT COUNT(*) FROM referral_partners WHERE application_id=$A1")" = "1" ] && echo true || echo false)"
+R=$(curl -s "$BASE_URL/api/referral/validate/$CODE1")
+check "approved code accepted by /api/referral/validate" "$(json_has "$R" '^\{"valid":true,"partnerName":"R\*\*\*"\}$')"
+
+post_json "$ADMIN_TOKEN" "/api/admin/referrals/$A2/reject" '{"reason":"Not eligible"}'; S1=$PCODE
+post_json "$ADMIN_TOKEN" "/api/admin/referrals/$A2/approve" '{}'
+check "reject -> 200 rejected + reviewed_at, no partner; approve after reject -> invalid_transition" "$([ "$S1" = "200" ] && [ "$PCODE" = "400" ] && [ "$(sql "SELECT CONCAT_WS('|',application_status,reviewed_at IS NOT NULL,(SELECT COUNT(*) FROM referral_partners WHERE application_id=$A2)) FROM referral_applications WHERE id=$A2")" = "rejected|1|0" ] && echo true || echo false)"
+
+# Rates and the snapshot rule
+put_json "$ADMIN_TOKEN" "/api/admin/settings/commission" '{"digital":"25","hardcopy":"25"}'; S1=$UCODE
+get_json "$ADMIN_TOKEN" "/api/admin/settings/commission"
+check "commission settings: PUT 25/25 then GET -> decimal strings" "$([ "$S1" = "200" ] && [ "$GCODE" = "200" ] && jh "$G" '^\{"digital":"25\.00","hardcopy":"25\.00"\}$' && echo true || echo false)"
+put_json "$ADMIN_TOKEN" "/api/admin/settings/commission" '{"digital":"-1","hardcopy":"10000.001"}'
+check "commission settings: out-of-range / 3 decimals -> 400 naming both fields" "$([ "$UCODE" = "400" ] && jh "$U" '"digital":' && jh "$U" '"hardcopy":' && echo true || echo false)"
+read -r TOKEN_P UID_P <<<"$(register "ordertest-p-$STAMP@example.com")"
+read -r TOKEN_Q UID_Q <<<"$(register "ordertest-q-$STAMP@example.com")"
+sql "DELETE FROM rate_limits WHERE bucket IN ('order-create:$UID_P','order-create:$UID_Q');"
+paid_order "$TOKEN_P" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\",\"referralCode\":\"$CODE1\"}"; PO1=$NID
+check "order with the approved code is attributed; commission 25.00 pending" "$([ "$VCODE" = "200" ] && [ "$(sql "SELECT CONCAT_WS('|',o.referral_partner_id,o.referral_code_snapshot,c.amount,c.status) FROM orders o JOIN commissions c ON c.order_id=o.id WHERE o.id=$PO1")" = "$PID1|$CODE1|25.00|pending" ] && echo true || echo false)"
+put_json "$ADMIN_TOKEN" "/api/admin/settings/commission" '{"digital":"30","hardcopy":"25"}'
+check "setRates 30/25 -> 200; existing commission row stays 25.00" "$([ "$UCODE" = "200" ] && jh "$U" '"digital":"30\.00","hardcopy":"25\.00"' && [ "$(sql "SELECT amount FROM commissions WHERE order_id=$PO1")" = "25.00" ] && echo true || echo false)"
+paid_order "$TOKEN_Q" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\",\"referralCode\":\"$CODE1\"}"; QO=$NID
+check "later order snapshots 30.00" "$([ "$(sql "SELECT amount FROM commissions WHERE order_id=$QO")" = "30.00" ] && echo true || echo false)"
+
+# Partners: toggle + edit
+post_json "$ADMIN_TOKEN" "/api/admin/partners/$PID1/toggle-active" ''; S1="$PCODE $(jh "$P" '"active":false' && echo y)"
+R=$(curl -s "$BASE_URL/api/referral/validate/$CODE1")
+check "toggle -> inactive; code now unknown; commission rows untouched" "$([ "$S1" = "200 y" ] && jh "$R" '^\{"valid":false\}$' && [ "$(sql "SELECT GROUP_CONCAT(CONCAT(amount,status) ORDER BY id) FROM commissions WHERE referral_partner_id=$PID1")" = "25.00pending,30.00pending" ] && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/admin/partners/$PID1/toggle-active" ''
+check "toggle again -> active; code valid again" "$([ "$PCODE" = "200" ] && jh "$P" '"active":true' && jh "$(curl -s "$BASE_URL/api/referral/validate/$CODE1")" '"valid":true' && echo true || echo false)"
+put_json "$ADMIN_TOKEN" "/api/admin/partners/$PID1" '{"phone":"123","upiId":"bad upi"}'; S1="$UCODE $(jh "$U" '"phone":' && jh "$U" '"upiId":' && echo y)"
+put_json "$ADMIN_TOKEN" "/api/admin/partners/$PID1" '{"referralCode":"VTP-HACKED","active":0}'; S2="$UCODE $(jh "$U" '"referralCode":' && echo y)"
+put_json "$ADMIN_TOKEN" "/api/admin/partners/$PID1" '{"upiId":"newpay@okicici","whatsapp":"+91 91234 56789"}'
+check "edit partner: bad values / unknown fields 400; valid edit 200, code + active unchanged" "$([ "$S1" = "400 y" ] && [ "$S2" = "400 y" ] && [ "$UCODE" = "200" ] && jh "$U" '"upiId":"newpay@okicici"' && [ "$(sql "SELECT CONCAT_WS('|',whatsapp,upi_id,referral_code,active) FROM referral_partners WHERE id=$PID1")" = "9123456789|newpay@okicici|$CODE1|1" ] && echo true || echo false)"
+put_json "$ADMIN_TOKEN" "/api/admin/partners/999999999" '{"upiId":"a1@okaxis"}'
+check "edit unknown partner -> 404" "$([ "$UCODE" = "404" ] && echo true || echo false)"
+
+# Commissions: list, transitions
+C1=$(sql "SELECT id FROM commissions WHERE order_id=$PO1"); C2=$(sql "SELECT id FROM commissions WHERE order_id=$QO")
+PO1NUM=$(sql "SELECT order_number FROM orders WHERE id=$PO1")
+get_json "$ADMIN_TOKEN" "/api/admin/commissions?partnerId=$PID1"
+check "commissions list by partner: 2 rows with order number, partner code, type, decimal amount; totals" "$([ "$GCODE" = "200" ] && jh "$G" '"total":2' && jh "$G" "\"id\":$C1,\"orderId\":$PO1,\"orderNumber\":\"$PO1NUM\"" && jh "$G" "\"referralCode\":\"$CODE1\"" && jh "$G" '"purchaseType":"digital","amount":"25\.00","status":"pending"' && jh "$G" '"totals":\{"pending":\{"count":2,"amount":"55\.00"\}' && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/commissions?status=bogus"; S1=$GCODE
+get_json "$ADMIN_TOKEN" "/api/admin/commissions?partnerId=abc"; S2=$GCODE
+get_json "$ADMIN_TOKEN" "/api/admin/commissions?status=payable&partnerId=$PID1"
+check "commissions list: bad status / partnerId 400; status filter applies" "$([ "$S1" = "400" ] && [ "$S2" = "400" ] && [ "$GCODE" = "200" ] && jh "$G" '"total":0' && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":"UPI-1"}'
+check "markPaid on pending -> 400 invalid_transition" "$([ "$PCODE" = "400" ] && jh "$P" '"code":"invalid_transition"' && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/payable" ''
+check "markPayable -> 200 payable, payable_at set" "$([ "$PCODE" = "200" ] && jh "$P" '"status":"payable"' && [ "$(sql "SELECT payable_at IS NOT NULL FROM commissions WHERE id=$C1")" = "1" ] && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{}'; S1="$PCODE $(jh "$P" '"fields":\{"payoutReference"' && echo y)"
+post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":"a\nb"}'; S2=$PCODE
+post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":" UPI-77881 "}'
+check "markPaid: no/bad reference 400; then paid with trimmed reference + paid_at" "$([ "$S1" = "400 y" ] && [ "$S2" = "400" ] && [ "$PCODE" = "200" ] && jh "$P" '"status":"paid"' && jh "$P" '"payoutReference":"UPI-77881"' && [ "$(sql "SELECT CONCAT_WS('|',status,payout_reference,paid_at IS NOT NULL) FROM commissions WHERE id=$C1")" = "paid|UPI-77881|1" ] && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/admin/orders/$QO/refund" '{"reason":"Commission reversal test"}'; S1=$PCODE
+post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C2/payable" ''
+check "refunded order: commission reversed; reversed -> payable 400 invalid_transition" "$([ "$S1" = "201" ] && [ "$(sql "SELECT status FROM commissions WHERE id=$C2")" = "reversed" ] && [ "$PCODE" = "400" ] && jh "$P" '"code":"invalid_transition"' && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/admin/commissions/999999999/payable" ''
+get_json "$ADMIN_TOKEN" "/api/admin/commissions?partnerId=$PID1"
+check "unknown commission 404; totals paid 25.00 / reversed 30.00" "$([ "$PCODE" = "404" ] && jh "$G" '"paid":\{"count":1,"amount":"25\.00"\}' && jh "$G" '"reversed":\{"count":1,"amount":"30\.00"\}' && echo true || echo false)"
+
+# Pricing settings (U1/U2 configurable, validated)
+get_json "$ADMIN_TOKEN" "/api/admin/settings/pricing"
+check "pricing GET -> 5 keys" "$([ "$GCODE" = "200" ] && jh "$G" '"shippingChargeDigital":"' && jh "$G" '"shippingChargeHardcopy":"' && jh "$G" '"gstPercentDigital":"' && jh "$G" '"gstPercentHardcopy":"' && jh "$G" '"gstMode":"(inclusive|exclusive)"' && echo true || echo false)"
+put_json "$ADMIN_TOKEN" "/api/admin/settings/pricing" '{"gstMode":"foo","gstPercentDigital":"101","shippingChargeHardcopy":"-1","bogus":1}'; S1="$UCODE $(jh "$U" '"gstMode":' && jh "$U" '"gstPercentDigital":' && jh "$U" '"shippingChargeHardcopy":' && jh "$U" '"bogus":' && echo y)"
+put_json "$ADMIN_TOKEN" "/api/admin/settings/pricing" '{}'
+check "pricing PUT: bad enum / percent / negative / unknown key / empty -> 400 with fields" "$([ "$S1" = "400 y" ] && [ "$UCODE" = "400" ] && echo true || echo false)"
+put_json "$ADMIN_TOKEN" "/api/admin/settings/pricing" '{"shippingChargeHardcopy":"40","gstPercentHardcopy":"5","gstMode":"exclusive"}'; S1=$UCODE
+Q=$(curl -s "$BASE_URL/api/checkout/quote?bookId=$BOOK_ID&type=hardcopy")
+check "pricing PUT 200; quote: 349 + 40 shipping + 5% exclusive = 408.45" "$([ "$S1" = "200" ] && jh "$U" '"shippingChargeHardcopy":"40\.00"' && jh "$Q" '"gst":19\.45,"gstPercent":5(\.0)?,"gstMode":"exclusive","total":408\.45' && echo true || echo false)"
+sql "$SAVED_SQL"
+check "every admin change audited (approve, reject, toggle x2, partner edit, rates x2, payable, paid, pricing)" "$([ "$(sql "SELECT GROUP_CONCAT(CONCAT(action,':',n) ORDER BY action) FROM (SELECT action, COUNT(*) n FROM audit_logs WHERE id > $AUDIT0 AND action IN ('referral.approve','referral.reject','partner.toggle_active','partner.update','settings.commission','commission.payable','commission.paid','settings.pricing') GROUP BY action) t")" = "commission.paid:1,commission.payable:1,partner.toggle_active:2,partner.update:1,referral.approve:1,referral.reject:1,settings.commission:2,settings.pricing:1" ] && echo true || echo false)"
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -gt 0 ] && exit 1

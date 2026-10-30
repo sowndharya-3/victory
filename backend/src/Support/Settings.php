@@ -13,4 +13,11 @@ class Settings
         $value = $stmt->fetchColumn();
         return $value === false || $value === null ? $default : (string) $value;
     }
+
+    /** Upsert; callers validate and audit (inside their own transaction). */
+    public static function set(string $key, string $value): void
+    {
+        Db::connection()->prepare('INSERT INTO settings (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)')
+            ->execute([$key, $value]);
+    }
 }

@@ -20,6 +20,22 @@ class Money
         return $m[1] === '-' ? -$paise : $paise;
     }
 
+    /**
+     * Admin-entered non-negative amount ("30", "30.5", "30.50", or a JSON int/float) within 0..$maxPaise,
+     * normalised to "30.50"; null when signed, exponent, >2 decimals, padded or out of range.
+     */
+    public static function parseAmount(mixed $value, int $maxPaise): ?string
+    {
+        if (is_int($value) || is_float($value)) {
+            $value = (string) $value; // JSON number: PHP's shortest round-trip form ("30.5"), checked as text below
+        }
+        if (!is_string($value) || !preg_match('/^\d{1,7}(\.\d{1,2})?\z/', $value)) {
+            return null;
+        }
+        $paise = self::toPaise($value);
+        return $paise <= $maxPaise ? self::fromPaise($paise) : null;
+    }
+
     public static function fromPaise(int $paise): string
     {
         $abs = abs($paise);

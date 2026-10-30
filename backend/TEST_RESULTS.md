@@ -152,3 +152,17 @@ Run date: 2026-10-30, after migration 006 (audit_logs `(entity_type, entity_id)`
 | book_test.sh / http_test.sh | 25/25, 23/23 |
 
 Books 1 and 2: `/api/books` byte-identical before/after. Test rows removed (order_test cleans itself; this run's book_test/http_test book and users deleted).
+
+## Task 20: Referral partners and commissions backend
+
+Run date: 2026-10-30, after migration 007 (`commissions.payable_at`).
+
+| Suite | Result |
+|---|---|
+| commission_test.php (new) | 41 passed, 0 failed (VTP- codes format/distinct, rate validation incl. sign/exponent/3 decimals/padding/bounds 0 and 10000, audit from/to, snapshot rule 25.00 -> setRates('30','25') -> old row 25.00, new digital 30.00 / hard copy 25.00, pending->paid and reversed->payable/paid `invalid_transition`, reference required/charset/length, payable_at/paid_at, inactive partner history unchanged) |
+| admin_authz_test.php | 99 passed, 0 failed (22 routes registered incl. 12 new; all 38 admin routes 401 without token / 403 customer) |
+| order_test.sh | 269 passed, 0 failed (235 + §10: application validation/normalisation, duplicate 409, 5/hour per IP and X-Forwarded-For ignored, approve/reject/transition guards, approved code validates and is attributed on a paid order, toggle makes the code unknown, partner edits, commission list + totals, payable/paid over HTTP, admin refund reverses -> payable 400, pricing settings change the quote, every action audited) |
+| reader 33, refund 69, reconciler 25, codes 56, order_fulfillment 27, money_pricing 14, signature_gateway 27, address_validator 14, middleware 5, jwt 6, upload_validator 3, race 1 | all passed, 0 failed |
+| book_test.sh / http_test.sh | 25/25, 23/23 |
+
+Books 1 and 2: `/api/books` md5-identical before/after. Settings back to their prior values; test applications, partners, commissions, users, rate_limits and audit rows removed (this run's book_test/http_test book 152, its upload dirs and 2 users deleted).

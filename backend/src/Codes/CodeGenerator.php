@@ -19,6 +19,12 @@ class CodeGenerator
         return 'VTT-' . self::random(8);
     }
 
+    /** Referral partner code: 6 chars = 30 bits; uniqueness is enforced by the DB (caller retries). */
+    public static function partner(): string
+    {
+        return 'VTP-' . self::random(6);
+    }
+
     /** Uppercase, drop whitespace/dashes, fold look-alikes (O->0, I/L->1). */
     public static function normalise(string $input): string
     {

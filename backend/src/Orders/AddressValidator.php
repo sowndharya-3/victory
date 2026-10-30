@@ -24,9 +24,9 @@ class AddressValidator
             $out[$f] = $v;
         }
         if (!isset($errors['phone'])) {
-            $digits = preg_replace('/[\s-]+/', '', $out['phone']);
-            if (preg_match('/^(?:\+?91|0)?([6-9][0-9]{9})$/', $digits, $m)) {
-                $out['phone'] = $m[1];
+            $phone = self::mobile($out['phone']);
+            if ($phone !== null) {
+                $out['phone'] = $phone;
             } else {
                 $errors['phone'] = 'Must be a valid 10-digit Indian mobile number';
             }
@@ -38,5 +38,12 @@ class AddressValidator
             throw new ApiException('Validation failed', 400, 'validation_error', $errors);
         }
         return $out;
+    }
+
+    /** "+91 98765-43210" / "098765 43210" / "9876543210" -> "9876543210"; null unless a 10-digit Indian mobile. */
+    public static function mobile(string $input): ?string
+    {
+        $digits = preg_replace('/[\s-]+/', '', $input);
+        return preg_match('/^(?:\+?91|0)?([6-9][0-9]{9})\z/', $digits, $m) ? $m[1] : null;
     }
 }

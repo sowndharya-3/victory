@@ -35,7 +35,7 @@ $routes = (new ReflectionProperty(Router::class, 'routes'))->getValue($router);
 $admin = array_values(array_filter($routes, fn ($r) => str_starts_with($r['path'], '/api/admin/') && $r['path'] !== '/api/admin/login'));
 $registered = array_map(fn ($r) => $r['method'] . ' ' . $r['path'], $admin);
 
-// Task 19 routes must exist (fails before they are implemented).
+// Task 19/20 routes must exist (fails before they are implemented).
 foreach ([
     'GET /api/admin/dashboard',
     'GET /api/admin/orders',
@@ -47,6 +47,19 @@ foreach ([
     'POST /api/admin/orders/{id}/code/revoke',
     'POST /api/admin/orders/{id}/code/reissue',
     'GET /api/admin/audit-logs',
+    // Task 20
+    'GET /api/admin/referrals',
+    'POST /api/admin/referrals/{id}/approve',
+    'POST /api/admin/referrals/{id}/reject',
+    'POST /api/admin/partners/{id}/toggle-active',
+    'PUT /api/admin/partners/{id}',
+    'GET /api/admin/commissions',
+    'POST /api/admin/commissions/{id}/payable',
+    'POST /api/admin/commissions/{id}/paid',
+    'GET /api/admin/settings/commission',
+    'PUT /api/admin/settings/commission',
+    'GET /api/admin/settings/pricing',
+    'PUT /api/admin/settings/pricing',
 ] as $route) {
     check("route registered: $route", in_array($route, $registered, true));
 }

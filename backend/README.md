@@ -43,11 +43,11 @@ Apply the initial schema against the running stack:
 
 ```bash
 docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/001_init.sql
-# then 002_book_management.sql, 003_orders_payments.sql, 004_refunds.sql, 005_books_page_count.sql and 006_audit_logs_entity_index.sql, in order
+# then 002_book_management.sql, 003_orders_payments.sql, 004_refunds.sql, 005_books_page_count.sql, 006_audit_logs_entity_index.sql and 007_commission_payable_at.sql, in order
 ```
 
 Migrations are one-shot: re-applying a file fails on "already exists" /
-duplicate column and changes no data. 003 to 006 are additive only; never drop the
+duplicate column and changes no data. 003 to 007 are additive only; never drop the
 volume to re-run them.
 
 ## API endpoints
@@ -107,6 +107,17 @@ volume to re-run them.
 | POST | /api/admin/orders/:id/code/revoke | admin | `{reason}` (1–255) revokes the order's current code and any access it granted; returns the detail. 404 no code |
 | POST | /api/admin/orders/:id/code/reissue | admin | `{reason}` (1–255) revokes the current code and returns `{code}` (`Cache-Control: no-store`): the only admin response that ever contains a plaintext code; give it to the customer, it is not shown again. 404 (not a paid digital order). 30 per 10 min per admin (429) |
 | GET | /api/admin/audit-logs?entityType=&entityId=&page=&perPage= | admin | `{items:[{id,adminId,userId,action,entityType,entityId,detail,createdAt}], page, perPage, total}`, newest first |
+| POST | /api/referral/applications | none | Partner sign-up `{name, qualification?, place?, district?, status (Student/Scholarship/Faculty/Institution), phone, whatsapp (10-digit Indian mobile, `+91`/spaces/dashes normalised), upiId? (name@bank or a 10-digit mobile), gmail}` (lengths per `referral_applications`; gmail lowercased) → 201 `{id, applicationStatus:"pending"}`. 400 `validation_error` with `fields`; 409 `duplicate_application` if that gmail has a pending/approved application. 5 valid submissions per hour per IP (`REMOTE_ADDR`; no `X-Forwarded-For` trust) → 429 |
+| GET | /api/admin/referrals?status=&page=&perPage= | admin | `{applications:{items:[{id,name,qualification,place,district,status,phone,whatsapp,upiId,gmail,applicationStatus,reviewedAt,createdAt,partnerId}],page,perPage,total}, partners:[{id,applicationId,name,phone,whatsapp,upiId,gmail,referralCode,active,createdAt,updatedAt}]}`; `status` filters applications (pending/approved/rejected); partners unpaginated |
+| POST | /api/admin/referrals/:id/approve | admin | Only from `pending` (row-locked): creates the partner with `referral_code` `VTP-` + 6 random Crockford base32 chars (unique, retried on collision) → `{application, partner}`. 400 `invalid_transition` otherwise, 404 |
+| POST | /api/admin/referrals/:id/reject | admin | `{reason?}` (≤500, audit only); only from `pending` → `{application}`; no partner row |
+| POST | /api/admin/partners/:id/toggle-active | admin | Flip `active` → partner. Inactive codes are unknown to validate/checkout; existing orders and commissions are untouched |
+| PUT | /api/admin/partners/:id | admin | Partial `{name?, phone?, whatsapp?, upiId?, gmail?}` (same rules as the application; `upiId` ""/null clears) → partner. Any other key → 400 (`referral_code`/`active` not editable here) |
+| GET | /api/admin/commissions?status=&partnerId=&page=&perPage= | admin | `{items:[{id,orderId,orderNumber,partner:{id,name,referralCode,active},purchaseType,amount,status,payoutReference,payableAt,paidAt,clawbackDue,reversedAt,createdAt}], page, perPage, total, totals:{pending,payable,paid,reversed,clawbackDue:{count,amount}}}`; totals honour `partnerId` only. Amounts are `"25.00"` strings |
+| POST | /api/admin/commissions/:id/payable | admin | `pending` → `payable` (`payable_at`) → commission. Anything else 400 `invalid_transition` (`reversed` can never be paid) |
+| POST | /api/admin/commissions/:id/paid | admin | `{payoutReference}` (required, 1–100 of letters, digits, space `. / # : _ -`) ; `payable` → `paid` (`paid_at`) → commission. 400 `validation_error` / `invalid_transition` |
+| GET / PUT | /api/admin/settings/commission | admin | `{digital, hardcopy}` flat ₹ per paid referral order, `"25.00"` strings; PUT needs both, 0–10000 with ≤2 decimals (string or number). Applies to orders paid afterwards only: amounts are snapshotted by `markPaid` |
+| GET / PUT | /api/admin/settings/pricing | admin | `{shippingChargeDigital, shippingChargeHardcopy, gstPercentDigital, gstPercentHardcopy, gstMode}` (U1/U2). PUT is partial: shipping 0–10000 ₹, GST 0–100 %, ≤2 decimals, `gstMode` inclusive/exclusive; unknown keys / empty body 400. Applies to new quotes/orders only |
 
 Access codes are stored as HMAC-SHA256 (pepper from `CODE_SECRET`) plus last 4 chars; the plaintext is kept
 AES-256-GCM-encrypted (order id as AAD, so a blob copied to another order won't decrypt) only until redeemed. Rotating `CODE_SECRET` invalidates every unredeemed code.
@@ -120,11 +131,13 @@ set; hard copy: fulfilment `cancelled` unless already shipped/out for delivery/d
 `refund.already_shipped` audit row); commission `pending`/`payable` → `reversed`, `paid` stays paid with
 `clawback_due=1`. A refunded order is never re-fulfilled. Every admin action writes `audit_logs` (`entity_type='refund'`).
 
+Referral/commission admin actions are audited too: `referral.approve`/`referral.reject` (`referral_application`), `partner.toggle_active`/`partner.update` (`referral_partner`, from/to), `commission.payable`/`commission.paid` (`commission`), `settings.commission`/`settings.pricing` (`settings`, from/to). Commission rows are created only by `markPaid`; rate changes, partner edits and deactivation never touch existing rows.
+
 Secure reader: the PDF stays in `storage/books/{id}/book.pdf` (outside the web root, no route; nginx also 404s `/uploads/books/*/book.pdf` and `/uploads/books/*/pages/`). Pages are rendered lazily with Poppler (`poppler-utils`: `pdfinfo`, `pdftoppm -jpeg -r 110`, argument-array `proc_open`, 30 s timeout, per-page `flock`, temp file + atomic rename) into `storage/books/{id}/pages/{n}.jpg`; the page count is cached in `books.page_count`. A new PDF upload clears both. Render errors return a generic `render_failed` (ids and exit code logged, never paths or stderr). Access = a non-revoked `book_access` row for the caller; a book later unpublished/archived stays readable by its owners. The public index/preview images are unchanged SP-4 uploads and never include reader pages. Production image needs `poppler-utils`.
 
 Common error shape: `{"error":{"code":"...","message":"...","fields"?:{...}}}`. Other codes seen across
 the API: `unauthorized` 401, `forbidden` 403 (wrong role), `not_found` 404, `validation_error` 400,
-`rate_limited` 429, `invalid_transition` 400 (admin fulfilment; 409 on refunds), `render_failed` 500 (reader), `server_error` 500 (generic body; the class and message are written to the PHP error log).
+`rate_limited` 429, `invalid_transition` 400 (admin fulfilment, referral applications, commissions; 409 on refunds), `duplicate_application` 409, `render_failed` 500 (reader), `server_error` 500 (generic body; the class and message are written to the PHP error log).
 
 ### Razorpay webhook setup
 
@@ -178,6 +191,6 @@ full test run:
 - `backend/tests/jwt_test.php` + `backend/tests/http_test.sh` — auth/health foundation
 - `backend/tests/upload_validator_test.php` + `backend/tests/book_test.sh` — book management (create → publish → cover/index/preview-pages/PDF uploads → public response shape/privacy → edit/unpublish/archive → role separation → invalid-file rejection)
 
-- `backend/tests/{money_pricing,address_validator,signature_gateway,order_fulfillment,codes,reconciler,race,middleware,refund,reader,admin_authz}_test.php` + `backend/tests/order_test.sh` — SP-5 orders, Razorpay, access codes, tracking, reconcile, refunds, secure reader, admin API (run the PHP ones with `docker compose exec -T php php tests/<file>.php`)
+- `backend/tests/{money_pricing,address_validator,signature_gateway,order_fulfillment,codes,reconciler,race,middleware,refund,reader,admin_authz,commission}_test.php` + `backend/tests/order_test.sh` — SP-5 orders, Razorpay, access codes, tracking, reconcile, refunds, secure reader, admin API, referral partners and commissions (run the PHP ones with `docker compose exec -T php php tests/<file>.php`)
 
 Re-run any of them against a live `docker compose up` stack any time to re-verify.
