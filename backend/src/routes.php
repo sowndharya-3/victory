@@ -15,6 +15,10 @@ use App\Controllers\TrackController;
 use App\Controllers\RefundController;
 use App\Controllers\AdminRefundController;
 use App\Controllers\ReaderController;
+use App\Controllers\AdminDashboardController;
+use App\Controllers\AdminOrderController;
+use App\Controllers\AdminCustomerController;
+use App\Controllers\AdminCodeController;
 
 $router->get('/api/health', [new HealthController(), 'check']);
 $router->post('/api/auth/register', [new AuthController(), 'register']);
@@ -64,3 +68,17 @@ $router->get('/api/admin/refunds', [$adminRefunds, 'list']);
 $router->post('/api/admin/refunds/{id}/approve', [$adminRefunds, 'approve']);
 $router->post('/api/admin/refunds/{id}/reject', [$adminRefunds, 'reject']);
 $router->post('/api/admin/orders/{id}/refund', [$adminRefunds, 'open']);
+
+$adminOrders = new AdminOrderController();
+$adminCustomers = new AdminCustomerController();
+$adminCodes = new AdminCodeController();
+$router->get('/api/admin/dashboard', [new AdminDashboardController(), 'show']);
+$router->get('/api/admin/orders', [$adminOrders, 'list']);
+$router->get('/api/admin/orders/{id}', [$adminOrders, 'show']);
+$router->put('/api/admin/orders/{id}/fulfilment', [$adminOrders, 'fulfilment']);
+$router->get('/api/admin/customers', [$adminCustomers, 'list']);
+$router->get('/api/admin/customers/{id}', [$adminCustomers, 'show']);
+$router->post('/api/admin/codes/verify', [$adminCodes, 'verify']);
+$router->post('/api/admin/orders/{id}/code/revoke', [$adminCodes, 'revoke']);
+$router->post('/api/admin/orders/{id}/code/reissue', [$adminCodes, 'reissue']);
+$router->get('/api/admin/audit-logs', [$adminOrders, 'auditLogs']);

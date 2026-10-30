@@ -34,10 +34,11 @@ fi
 cleanup() {
   # Always restore settings and remove fixtures, even on failure.
   sql "UPDATE settings SET \`value\`='0' WHERE \`key\`='gst_percent_digital'; UPDATE settings SET \`value\`='inclusive' WHERE \`key\`='gst_mode';
-       DELETE FROM rate_limits WHERE bucket LIKE 'referral-validate:%' OR bucket LIKE 'code-redeem-%' OR bucket LIKE 'code-reissue:%' OR bucket LIKE 'track:%';
+       DELETE FROM rate_limits WHERE bucket LIKE 'referral-validate:%' OR bucket LIKE 'code-redeem-%' OR bucket LIKE 'code-reissue:%' OR bucket LIKE 'track:%' OR bucket LIKE 'admin-code-%';
        DELETE FROM payment_events WHERE event_id LIKE 'evt_ordertest_%';"
   if [ -n "$BOOK_ID" ]; then
     sql "DELETE FROM audit_logs WHERE entity_type='access_code' AND entity_id IN (SELECT id FROM access_codes WHERE book_id=$BOOK_ID);
+         DELETE FROM audit_logs WHERE entity_type='order' AND entity_id IN (SELECT id FROM orders WHERE book_id=$BOOK_ID);
          DELETE FROM audit_logs WHERE entity_type='refund' AND entity_id IN (SELECT id FROM refunds WHERE order_id IN (SELECT id FROM orders WHERE book_id=$BOOK_ID));
          DELETE FROM refunds WHERE order_id IN (SELECT id FROM orders WHERE book_id=$BOOK_ID);
          DELETE FROM access_codes WHERE book_id=$BOOK_ID;
@@ -52,7 +53,8 @@ cleanup() {
   TU="SELECT id FROM users WHERE email LIKE 'ordertest-%@example.com'"
   TO="SELECT id FROM orders WHERE user_id IN ($TU)"
   sql "DELETE FROM audit_logs WHERE user_id IN ($TU) OR (entity_type='refund' AND entity_id IN (SELECT id FROM refunds WHERE order_id IN ($TO)))
-         OR (entity_type='access_code' AND entity_id IN (SELECT id FROM access_codes WHERE order_id IN ($TO)));
+         OR (entity_type='access_code' AND entity_id IN (SELECT id FROM access_codes WHERE order_id IN ($TO)))
+         OR (entity_type='order' AND entity_id IN ($TO));
        DELETE FROM refunds WHERE order_id IN ($TO);
        DELETE FROM access_codes WHERE order_id IN ($TO);
        DELETE FROM commissions WHERE order_id IN ($TO);
@@ -702,6 +704,190 @@ post_json "$ADMIN_TOKEN" "/api/admin/refunds/$RFL/approve" '{}'
 get_json "$TOKEN_L" "/api/books/$RB/access"
 hdr_get "$TOKEN_L" "/api/books/$RB/read/pages/1"
 check "after refund: access {owned:false,status:revoked}, page 403 forbidden" "$(jh "$P" '"status":"refunded"' && [ "$G" = '{"owned":false,"status":"revoked"}' ] && [ "$RCODE" = "403" ] && grep -q '"code":"forbidden"' "$TMP/r.bin" && echo true || echo false)"
+
+echo "=== 9. Admin: dashboard, orders, customers, codes, fulfilment, audit ==="
+jget() { echo "$1" | grep -o "\"$2\":[^,}]*" | head -1 | cut -d: -f2- | tr -d '"'; }
+numeq() { awk -v a="$1" -v b="$2" 'BEGIN{exit !(a != "" && a+0 == b+0)}'; }
+put_json() { # $1 token $2 path $3 json -> UCODE, U
+  UCODE=$(curl -s -o "$TMP/u.json" -w '%{http_code}' -X PUT "$BASE_URL$2" -H "Content-Type: application/json" ${1:+-H "Authorization: Bearer $1"} -d "$3"); U=$(cat "$TMP/u.json")
+}
+ids_of() { echo "$1" | grep -o '{"id":[0-9]*,"orderNumber"' | grep -o '[0-9]*' | tr '\n' ' '; }
+fulfil() { put_json "$ADMIN_TOKEN" "/api/admin/orders/$1/fulfilment" "$2"; }
+DASH_FIELDS="publishedBooks totalCustomers digitalPurchases hardcopyOrders successfulPayments pendingOrders revenue refundedAmount pendingRefunds commissionPending commissionPayable"
+dash_sql() {
+  sql "SELECT CONCAT_WS(' ',
+    (SELECT COUNT(*) FROM books WHERE published=1 AND archived=0), (SELECT COUNT(*) FROM users),
+    (SELECT COUNT(*) FROM orders WHERE status='paid' AND purchase_type='digital'),
+    (SELECT COUNT(*) FROM orders WHERE status='paid' AND purchase_type='hardcopy'),
+    (SELECT COUNT(*) FROM orders WHERE status IN ('paid','refunded')),
+    (SELECT COUNT(*) FROM orders WHERE status='paid' AND purchase_type='hardcopy' AND fulfilment_status IN ('confirmed','processing')),
+    (SELECT COALESCE(SUM(amount),0) FROM orders WHERE status='paid'),
+    (SELECT COALESCE(SUM(amount),0) FROM refunds WHERE status='refunded'),
+    (SELECT COUNT(*) FROM refunds WHERE status IN ('requested','approved','processing')),
+    (SELECT COALESCE(SUM(amount),0) FROM commissions WHERE status='pending'),
+    (SELECT COALESCE(SUM(amount),0) FROM commissions WHERE status='payable'))"
+}
+dash_matches_sql() { # $1 dashboard json
+  local exp i=0 f; read -r -a exp <<<"$(dash_sql)"
+  for f in $DASH_FIELDS; do
+    numeq "$(jget "$1" "$f")" "${exp[$i]}" || { echo "  mismatch $f: api=$(jget "$1" "$f") sql=${exp[$i]}" >&2; return 1; }
+    i=$((i+1))
+  done
+}
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'code-redeem-%' OR bucket LIKE 'admin-code-%' OR bucket LIKE 'track:%';"
+read -r TOKEN_N UID_N <<<"$(register "ordertest-n-$STAMP@example.com")"
+PHONE_N="7$(printf '%09d' $(( (RANDOM * 32768 + RANDOM) % 1000000000 )))" # digits unrelated to the email stamp
+sql "DELETE FROM rate_limits WHERE bucket='order-create:$UID_N'; UPDATE users SET name='Nila Admintest$STAMP', phone='$PHONE_N' WHERE id=$UID_N;"
+
+get_json "$ADMIN_TOKEN" "/api/admin/dashboard"; D0=$G
+check "dashboard -> 200, every field equals its SQL count/sum" "$([ "$GCODE" = "200" ] && dash_matches_sql "$D0" && echo true || echo false)"
+HCN="{\"bookId\":$BOOK_ID,\"purchaseType\":\"hardcopy\",\"address\":$ADDR}"
+paid_order "$TOKEN_N" "$DIG"; ND=$NID
+paid_order "$TOKEN_N" "$HCN"; NH=$NID
+TCN=$(echo "$V" | grep -o '"trackingCode":"[^"]*"' | cut -d'"' -f4)
+paid_order "$TOKEN_N" "$HCN"; NH2=$NID
+paid_order "$TOKEN_N" "$HCN"; NH3=$NID
+new_order "$TOKEN_N" "$HCN"; NP=$NID
+get_json "$TOKEN_N" "/api/me/orders/$ND/access-code"; NCODE1=$(code_of "$G")
+check "section 9 fixtures: 1 digital + 3 hard copy paid, 1 pending, code revealed" "$([ -n "$ND" ] && [ -n "$NH3" ] && [ -n "$NP" ] && [ -n "$NCODE1" ] && [ -n "$TCN" ] && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/dashboard"; D1=$G
+dd() { awk -v a="$(jget "$D1" "$1")" -v b="$(jget "$D0" "$1")" 'BEGIN{printf "%.2f", a-b}'; }
+check "dashboard after seeding equals SQL" "$(dash_matches_sql "$D1" && echo true || echo false)"
+check "dashboard deltas: +1 digital, +3 hard copy, +4 payments, +3 pending fulfilment, revenue +1246" "$(numeq "$(dd digitalPurchases)" 1 && numeq "$(dd hardcopyOrders)" 3 && numeq "$(dd successfulPayments)" 4 && numeq "$(dd pendingOrders)" 3 && numeq "$(dd revenue)" 1246 && echo true || echo false)"
+
+# Search
+NDNUM=$(sql "SELECT order_number FROM orders WHERE id=$ND")
+get_json "$ADMIN_TOKEN" "/api/admin/orders?q=$NDNUM"
+check "orders: q=order number -> exactly that order" "$([ "$GCODE" = "200" ] && [ "$(ids_of "$G")" = "$ND " ] && jh "$G" '"total":1[,}]' && echo true || echo false)"
+check "orders row shape (customer, book, digitalCode last4, razorpayPaymentId, adminFlag)" "$(jh "$G" "\"customer\":\\{\"id\":$UID_N,\"name\":\"Nila Admintest$STAMP\",\"email\":\"ordertest-n-$STAMP@example.com\"\\},\"book\":\\{\"id\":$BOOK_ID,\"title\":\"Order Test Book\"\\},\"purchaseType\":\"digital\",\"status\":\"paid\",\"amount\":199(\\.0)?," && jh "$G" "\"razorpayPaymentId\":\"pay_fake_[^\"]*\",\"digitalCode\":\\{\"status\":\"active\",\"last4\":\"${NCODE1: -4}\"\\},\"trackingCode\":null,\"fulfilmentStatus\":\"not_applicable\",\"adminFlag\":null" && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/orders?q=ordertest-n-$STAMP"
+check "orders: q=email fragment -> all 5 of the customer's orders, newest first" "$([ "$(ids_of "$G")" = "$NP $NH3 $NH2 $NH $ND " ] && jh "$G" '"page":1,"perPage":25,"total":5' && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/orders?q=Admintest$STAMP"; C1=$(ids_of "$G")
+get_json "$ADMIN_TOKEN" "/api/admin/orders?q=${PHONE_N:2}"
+check "orders: q=name fragment and phone fragment find the customer's orders" "$([ "$C1" = "$NP $NH3 $NH2 $NH $ND " ] && [ "$(ids_of "$G")" = "$NP $NH3 $NH2 $NH $ND " ] && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/orders?q=$(echo "$TCN" | tr 'A-Z' 'a-z')"
+check "orders: q=tracking code (any case) -> that hard-copy order only" "$([ "$(ids_of "$G")" = "$NH " ] && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/orders?q=${TCN:0:8}"
+check "orders: tracking code is exact-match only (prefix finds nothing)" "$(jh "$G" '"total":0' && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/orders?q=$(echo "$NCODE1" | tr 'A-Z' 'a-z')"
+check "orders: q=pasted full digital code (lowercase, dashes) -> that order via hash" "$([ "$(ids_of "$G")" = "$ND " ] && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/orders?q=${NCODE1: -4}&type=digital"
+check "orders: q=code last4 -> includes that order" "$(echo " $(ids_of "$G")" | grep -q " $ND " && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/orders?q=%25"; C1=$GCODE; T1=$(jget "$G" total)
+get_json "$ADMIN_TOKEN" "/api/admin/orders?q=_"
+check "orders: LIKE wildcards in q are literal (% and _ match nothing)" "$([ "$C1" = "200" ] && [ "$T1" = "0" ] && jh "$G" '"total":0' && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/orders?q=ordertest-n-$STAMP&type=hardcopy&status=paid&fulfilment=confirmed"; C1=$(ids_of "$G")
+get_json "$ADMIN_TOKEN" "/api/admin/orders?q=ordertest-n-$STAMP&status=pending"
+check "orders: type/status/fulfilment filters" "$([ "$C1" = "$NH3 $NH2 $NH " ] && [ "$(ids_of "$G")" = "$NP " ] && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/orders?q=ordertest-n-$STAMP&perPage=2&page=2"; C1=$(ids_of "$G"); G1=$G
+get_json "$ADMIN_TOKEN" "/api/admin/orders?perPage=1000"
+check "orders: pagination page 2 of perPage 2; perPage capped at 100" "$([ "$C1" = "$NH2 $NH " ] && jh "$G1" '"page":2,"perPage":2,"total":5' && jh "$G" '"perPage":100' && echo true || echo false)"
+CODES=""
+for qs in "type=bogus" "status=bogus" "fulfilment=bogus" "page=0" "perPage=abc"; do get_json "$ADMIN_TOKEN" "/api/admin/orders?$qs"; CODES="$CODES $GCODE"; done
+check "orders: bad type/status/fulfilment/page/perPage -> 400" "$([ "$CODES" = " 400 400 400 400 400" ] && echo true || echo false)"
+
+# Detail
+get_json "$ADMIN_TOKEN" "/api/admin/orders/$ND"; GD=$G
+check "detail (digital): breakdown, address null, refunds [], commission null, auditLog []" "$([ "$GCODE" = "200" ] && jh "$G" '"breakdown":\{"subtotal":199(\.0)?,"shipping":0(\.0)?,"gst":0(\.0)?,"gstPercent":0(\.0)?,"gstMode":"inclusive","total":199(\.0)?,"currency":"INR"\}' && jh "$G" '"address":null' && jh "$G" '"refunds":\[\],"commission":null,"auditLog":\[\]' && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/orders/$NH"; GH=$G
+check "detail (hard copy): address, tracking code, customer phone" "$(jh "$G" '"address":\{"fullName":"Asha Kumar","phone":"9876543210"' && jh "$G" "\"trackingCode\":\"$TCN\"" && jh "$G" "\"phone\":\"$PHONE_N\"" && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/orders/999999999"; C1=$GCODE
+get_json "$ADMIN_TOKEN" "/api/admin/orders/abc"
+check "detail: unknown -> 404, non-numeric -> 404" "$([ "$C1" = "404" ] && [ "$GCODE" = "404" ] && echo true || echo false)"
+
+# Fulfilment
+fulfil "$NH" '{"status":"delivered"}'
+check "fulfilment confirmed -> delivered -> 400 invalid_transition" "$([ "$UCODE" = "400" ] && jh "$U" '"code":"invalid_transition"' && echo true || echo false)"
+fulfil "$NH" '{"status":"bogus"}'; C1=$UCODE
+fulfil "$ND" '{"status":"processing"}'; C2=$UCODE
+fulfil "$NP" '{"status":"processing"}'; C3=$UCODE
+fulfil "999999999" '{"status":"processing"}'
+check "fulfilment: bad status 400, digital order 400, unpaid hard copy 400, unknown 404" "$([ "$C1" = "400" ] && [ "$C2" = "400" ] && [ "$C3" = "400" ] && [ "$UCODE" = "404" ] && echo true || echo false)"
+fulfil "$NH" '{"status":"processing"}'
+get_json "$TOKEN_N" "/api/me/orders/$NH"; G1=$G
+get_json "" "/api/track/$TCN"
+check "confirmed -> processing 200; customer and tracking page see processing at once" "$([ "$UCODE" = "200" ] && jh "$U" '"fulfilmentStatus":"processing"' && jh "$G1" '"fulfilmentStatus":"processing"' && jh "$G" '"status":"processing","label":"Processing"' && echo true || echo false)"
+fulfil "$NH" '{"status":"shipped"}'; C1=$UCODE; U1=$U
+fulfil "$NH" '{"status":"shipped","courier":"   "}'
+check "shipped without courier (or blank) -> 400 validation_error fields.courier" "$([ "$C1" = "400" ] && jh "$U1" '"fields":\{"courier"' && [ "$UCODE" = "400" ] && echo true || echo false)"
+fulfil "$NH" '{"status":"shipped","courier":"India Post","trackingNumber":"EE123456789IN"}'
+check "processing -> shipped 200; courier, tracking number and shipped_at stored" "$([ "$UCODE" = "200" ] && [ "$(sql "SELECT CONCAT(fulfilment_status,'|',courier,'|',tracking_number,'|',shipped_at IS NOT NULL) FROM orders WHERE id=$NH")" = "shipped|India Post|EE123456789IN|1" ] && echo true || echo false)"
+get_json "" "/api/track/$TCN"
+check "tracking page shows Shipped with courier and tracking number" "$(jh "$G" '"status":"shipped","label":"Shipped"' && jh "$G" '"courier":"India Post","trackingNumber":"EE123456789IN"' && echo true || echo false)"
+fulfil "$NH" '{"status":"out_for_delivery"}'; C1=$UCODE
+fulfil "$NH" '{"status":"delivered"}'; C2=$UCODE
+fulfil "$NH" '{"status":"cancelled"}'
+get_json "$TOKEN_N" "/api/me/orders/$NH"
+check "shipped -> out_for_delivery -> delivered 200; delivered -> cancelled 400; customer sees delivered" "$([ "$C1" = "200" ] && [ "$C2" = "200" ] && [ "$UCODE" = "400" ] && jh "$U" '"code":"invalid_transition"' && jh "$G" '"fulfilmentStatus":"delivered"' && echo true || echo false)"
+fulfil "$NH2" '{"status":"processing"}'; C1=$UCODE
+fulfil "$NH2" '{"status":"shipped","courier":"DTDC"}'; C2=$UCODE
+fulfil "$NH2" '{"status":"delivered"}'; C3=$UCODE
+fulfil "$NH3" '{"status":"cancelled"}'; C4=$UCODE
+fulfil "$NH3" '{"status":"processing"}'
+check "shipped -> delivered (skip out_for_delivery) ok; confirmed -> cancelled ok; cancelled is final" "$([ "$C1$C2$C3$C4" = "200200200200" ] && [ "$UCODE" = "400" ] && echo true || echo false)"
+check "fulfilment audit rows: 4 for NH (admin id), none for rejected attempts, NH3 to=cancelled" "$([ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE entity_type='order' AND entity_id=$NH AND action='order.fulfilment' AND admin_id IS NOT NULL")" = "4" ] && [ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE entity_type='order' AND entity_id IN ($ND,$NP)")" = "0" ] && [ "$(sql "SELECT JSON_UNQUOTE(JSON_EXTRACT(detail,'\$.to')) FROM audit_logs WHERE entity_type='order' AND entity_id=$NH3")" = "cancelled" ] && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/audit-logs?entityType=order&entityId=$NH"
+check "GET audit-logs?entityType=order&entityId -> the 4 fulfilment rows" "$([ "$GCODE" = "200" ] && [ "$(count_of "$G" '"action":"order.fulfilment"')" = "4" ] && jh "$G" '"total":4' && echo true || echo false)"
+
+# Codes
+post_json "$ADMIN_TOKEN" "/api/admin/codes/verify" "{\"code\":\"$(echo "$NCODE1" | tr 'A-Z' 'a-z')\"}"
+check "verify code -> active, not redeemed, order number, never echoes the code" "$([ "$PCODE" = "200" ] && jh "$P" "^\\{\"status\":\"active\",\"bookTitle\":\"Order Test Book\",\"orderNumber\":\"$NDNUM\",\"orderStatus\":\"paid\",\"redeemed\":false\\}$" && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/admin/codes/verify" '{"code":"AAAA-BBBB-CCCC-DDDD"}'; C1=$PCODE
+post_json "$ADMIN_TOKEN" "/api/admin/codes/verify" "{\"code\":\"$TCN\"}"; C2=$PCODE
+post_json "$ADMIN_TOKEN" "/api/admin/codes/verify" '{"code":123}'
+check "verify unknown code 404, tracking code 404, non-string 400" "$([ "$C1" = "404" ] && [ "$C2" = "404" ] && [ "$PCODE" = "400" ] && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/admin/orders/$ND/code/revoke" '{}'; C1=$PCODE
+post_json "$ADMIN_TOKEN" "/api/admin/orders/$ND/code/revoke" "{\"reason\":\"$(printf 'x%.0s' $(seq 1 256))\"}"; C2=$PCODE
+post_json "$ADMIN_TOKEN" "/api/admin/orders/$NH/code/revoke" '{"reason":"x"}'
+check "revoke: no reason 400, 256-char reason 400, hard copy (no code) 404" "$([ "$C1" = "400" ] && [ "$C2" = "400" ] && [ "$PCODE" = "404" ] && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/admin/orders/$ND/code/revoke" '{"reason":"Shared on a public forum"}'
+check "revoke -> 200 digitalCode revoked" "$([ "$PCODE" = "200" ] && jh "$P" "\"digitalCode\":\\{\"status\":\"revoked\",\"last4\":\"${NCODE1: -4}\"\\}" && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/admin/codes/verify" "{\"code\":\"$NCODE1\"}"
+check "verify after revoke -> revoked" "$(jh "$P" '"status":"revoked"' && echo true || echo false)"
+post_json "$TOKEN_N" "/api/me/orders/$ND/reissue-code" '{}'
+check "customer cannot undo an admin revoke (reissue_requires_admin)" "$([ "$PCODE" = "403" ] && jh "$P" '"code":"reissue_requires_admin"' && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/admin/orders/$ND/code/reissue" '{}'; C1=$PCODE
+post_json "$ADMIN_TOKEN" "/api/admin/orders/$NH/code/reissue" '{"reason":"x"}'; C2=$PCODE
+curl -s -D "$TMP/r.h" -o "$TMP/p.json" -X POST "$BASE_URL/api/admin/orders/$ND/code/reissue" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d '{"reason":"Customer lost the code"}'
+P=$(cat "$TMP/p.json"); NCODE2=$(code_of "$P")
+check "reissue: no reason 400, hard copy 404; with reason -> new code, no-store" "$([ "$C1" = "400" ] && [ "$C2" = "404" ] && echo "$NCODE2" | grep -Eq '^([0-9A-HJKMNP-TV-Z]{4}-){3}[0-9A-HJKMNP-TV-Z]{4}$' && [ "$NCODE2" != "$NCODE1" ] && [ "$(hdr Cache-Control)" = "no-store" ] && echo true || echo false)"
+post_json "$TOKEN_N" "/api/me/redeem" "{\"code\":\"$NCODE1\"}"; C1=$PCODE; P1=$P
+post_json "$TOKEN_N" "/api/me/redeem" "{\"code\":\"$NCODE2\"}"
+check "old code -> 403 code_revoked; reissued code redeems for the buyer" "$([ "$C1" = "403" ] && jh "$P1" '"code":"code_revoked"' && [ "$PCODE" = "200" ] && jh "$P" "\"orderId\":$ND" && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/admin/codes/verify" "{\"code\":\"$NCODE2\"}"
+check "verify reissued code after redemption -> redeemed true" "$(jh "$P" '"status":"redeemed".*"redeemed":true' && echo true || echo false)"
+check "audit: admin revoke + admin reissue rows for the order's codes" "$([ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE entity_type='access_code' AND admin_id IS NOT NULL AND action IN ('access_code.revoke','access_code.reissue') AND entity_id IN (SELECT id FROM access_codes WHERE order_id=$ND)")" = "2" ] && echo true || echo false)"
+
+# Never plaintext codes, ciphertext or hashes in list/detail/customer/audit responses
+get_json "$ADMIN_TOKEN" "/api/admin/orders/$ND"; GD2=$G
+get_json "$ADMIN_TOKEN" "/api/admin/orders?q=ordertest-n-$STAMP"; GL=$G
+get_json "$ADMIN_TOKEN" "/api/admin/customers/$UID_N"; GC=$G
+get_json "$ADMIN_TOKEN" "/api/admin/audit-logs?entityType=access_code"; GA=$G
+check "detail auditLog lists revoke and reissue" "$(jh "$GD2" '"auditLog":\[.*"action":"access_code.revoke".*"action":"access_code.reissue"' && echo true || echo false)"
+LEAK=false
+HASHES=$(sql "SELECT code_hash FROM access_codes WHERE order_id=$ND")
+for body in "$GD" "$GD2" "$GH" "$GL" "$GC" "$GA"; do
+  for c in "$NCODE1" "$NCODE2"; do echo "$body" | grep -q -e "$c" -e "$(echo "$c" | tr -d '-')" && LEAK=true; done
+  for h in $HASHES; do echo "$body" | grep -q "$h" && LEAK=true; done
+  echo "$body" | grep -Eqi 'code_?enc|code_?hash|"code":"' && LEAK=true
+done
+check "no plaintext code, hash or code_enc in admin list/detail/customer/audit JSON" "$([ "$LEAK" = "false" ] && [ -n "$GD2" ] && [ -n "$GA" ] && echo true || echo false)"
+
+# Customers
+get_json "$ADMIN_TOKEN" "/api/admin/customers?q=ordertest-n-$STAMP"
+check "customers: q=email fragment -> one row with orderCount 5, paidTotal 1246" "$([ "$GCODE" = "200" ] && jh "$G" "\"items\":\\[\\{\"id\":$UID_N,\"name\":\"Nila Admintest$STAMP\",\"email\":\"ordertest-n-$STAMP@example.com\",\"phone\":\"$PHONE_N\",\"createdAt\":\"[^\"]*\",\"orderCount\":5,\"paidTotal\":1246(\\.0)?\\}\\]" && jh "$G" '"total":1' && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/customers?q=%25"; C1=$(jget "$G" total)
+check "customers: detail has the 5 orders; LIKE wildcard literal" "$([ "$(ids_of "$GC")" = "$NP $NH3 $NH2 $NH $ND " ] && jh "$GC" "^\\{\"id\":$UID_N," && [ "$C1" = "0" ] && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/customers/999999999"; C1=$GCODE
+get_json "$ADMIN_TOKEN" "/api/admin/audit-logs?entityType=bad%20type"
+check "customer unknown 404; audit-logs bad entityType 400" "$([ "$C1" = "404" ] && [ "$GCODE" = "400" ] && echo true || echo false)"
+
+# Admin verify limit: 30 per 10 min per admin (fixed window; avoid straddling the boundary)
+INTO=$(( $(date +%s) % 600 )); [ "$INTO" -gt 570 ] && sleep $((601 - INTO))
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'admin-code-verify:%';"
+BURST=$(for i in $(seq 1 31); do post_json "$ADMIN_TOKEN" "/api/admin/codes/verify" '{"code":"AAAA-BBBB-CCCC-DDDD"}'; echo "$PCODE"; done | sort | uniq -c | tr -s ' ' | sed 's/^ //' | tr '\n' ' ')
+check "admin verify: 30 per 10 min -> 31st 429" "$([ "$BURST" = "30 404 1 429 " ] && echo true || echo false)"
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'admin-code-%';"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

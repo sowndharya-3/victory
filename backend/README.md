@@ -43,11 +43,11 @@ Apply the initial schema against the running stack:
 
 ```bash
 docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/001_init.sql
-# then 002_book_management.sql, 003_orders_payments.sql, 004_refunds.sql and 005_books_page_count.sql, in order
+# then 002_book_management.sql, 003_orders_payments.sql, 004_refunds.sql, 005_books_page_count.sql and 006_audit_logs_entity_index.sql, in order
 ```
 
 Migrations are one-shot: re-applying a file fails on "already exists" /
-duplicate column and changes no data. 003, 004 and 005 are additive only; never drop the
+duplicate column and changes no data. 003 to 006 are additive only; never drop the
 volume to re-run them.
 
 ## API endpoints
@@ -97,6 +97,16 @@ volume to re-run them.
 | POST | /api/admin/orders/:id/refund | admin | `{reason}` → 201 `{refund}` opened as `approved` and processed at once; 200 with the existing refund if one is open (an open customer request is approved). 404, 409 `not_refundable`, 502 `gateway_error` |
 | GET | /api/books/:id/access | customer | `{owned, status: "active" / "revoked" / "none", pageCount?}` (`pageCount` only when active; `Cache-Control: private, no-store`). 404 `not_found` (id not plain digits), 500 `render_failed` |
 | GET | /api/books/:id/read/pages/:n | customer + active `book_access` | `image/jpeg` page `n` (1..pageCount), `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`. 403 `forbidden` (no or revoked access; admins too), 404 `not_found` (bad id / page out of range), 429 `rate_limited` (240 per 5 min per user), 500 `render_failed` |
+| GET | /api/admin/dashboard | admin | `{publishedBooks, totalCustomers, digitalPurchases, hardcopyOrders, successfulPayments, pendingOrders, revenue, refundedAmount, pendingRefunds, commissionPending, commissionPayable}`. Purchases/revenue count `paid` orders only (revenue is net: refunded orders leave `paid`); `successfulPayments` = orders `paid` or `refunded`; `pendingOrders` = paid hard copies `confirmed`/`processing`; `pendingRefunds` = refunds `requested`/`approved`/`processing`; `commissionPending`/`commissionPayable` = ₹ sums by commission status. Amounts are ₹ numbers |
+| GET | /api/admin/orders?q=&type=&status=&fulfilment=&page=&perPage= | admin | `{items, page, perPage, total}`, newest first; `perPage` default 25, max 100. `q` (≤100 chars) matches order number / customer name / email / phone (substring, `%` `_` literal), tracking code (exact, any case), digital code last 4, or a pasted full code (exact, via its hash). Item: `{id, orderNumber, customer:{id,name,email}, book:{id,title}, purchaseType, status, amount, paidAt, createdAt, razorpayPaymentId, digitalCode:{status,last4}\|null, trackingCode, fulfilmentStatus, adminFlag}`. 400 `validation_error` (bad filter/page) |
+| GET | /api/admin/orders/:id | admin | list item + `customer.phone`, `breakdown:{subtotal,shipping,gst,gstPercent,gstMode,total,currency}`, `address` (hard copy, else null), `courier`, `trackingNumber`, `shippedAt`, `referralCode`, `refunds[]` (admin refund shape), `commission` (or null), `auditLog[]` (order, its codes and refunds). Never a plaintext code, `code_enc` or hash. 404 |
+| PUT | /api/admin/orders/:id/fulfilment | admin | `{status, courier?, trackingNumber?}` on paid hard-copy orders: `confirmed→processing→shipped→out_for_delivery→delivered` (`out_for_delivery` may be skipped), `cancelled` from any state before `delivered`. `shipped` needs `courier` (1–100), sets `shipped_at`. Checked under a row lock; writes an `order.fulfilment` audit row; customer `/api/me/orders/:id` and `/api/track/:code` show it at once. Returns the detail. 400 `invalid_transition` (illegal move, digital or unpaid order) / `validation_error`, 404. Cancelling does not refund: open a refund separately |
+| GET | /api/admin/customers?q=&page=&perPage= | admin | `{items:[{id,name,email,phone,createdAt,orderCount,paidTotal}], page, perPage, total}`; `q` matches name/email/phone |
+| GET | /api/admin/customers/:id | admin | customer + `orders[]` (newest 200, list item shape). 404 |
+| POST | /api/admin/codes/verify | admin | `{code}` → `{status, bookTitle, orderNumber, orderStatus, redeemed}` (hash lookup; never echoes the code). 404 unknown, 400 non-string. 30 per 10 min per admin (429) |
+| POST | /api/admin/orders/:id/code/revoke | admin | `{reason}` (1–255) revokes the order's current code and any access it granted; returns the detail. 404 no code |
+| POST | /api/admin/orders/:id/code/reissue | admin | `{reason}` (1–255) revokes the current code and returns `{code}` (`Cache-Control: no-store`): the only admin response that ever contains a plaintext code; give it to the customer, it is not shown again. 404 (not a paid digital order). 30 per 10 min per admin (429) |
+| GET | /api/admin/audit-logs?entityType=&entityId=&page=&perPage= | admin | `{items:[{id,adminId,userId,action,entityType,entityId,detail,createdAt}], page, perPage, total}`, newest first |
 
 Access codes are stored as HMAC-SHA256 (pepper from `CODE_SECRET`) plus last 4 chars; the plaintext is kept
 AES-256-GCM-encrypted (order id as AAD, so a blob copied to another order won't decrypt) only until redeemed. Rotating `CODE_SECRET` invalidates every unredeemed code.
@@ -114,7 +124,7 @@ Secure reader: the PDF stays in `storage/books/{id}/book.pdf` (outside the web r
 
 Common error shape: `{"error":{"code":"...","message":"...","fields"?:{...}}}`. Other codes seen across
 the API: `unauthorized` 401, `forbidden` 403 (wrong role), `not_found` 404, `validation_error` 400,
-`rate_limited` 429, `render_failed` 500 (reader), `server_error` 500 (generic body; the class and message are written to the PHP error log).
+`rate_limited` 429, `invalid_transition` 400 (admin fulfilment; 409 on refunds), `render_failed` 500 (reader), `server_error` 500 (generic body; the class and message are written to the PHP error log).
 
 ### Razorpay webhook setup
 
@@ -168,6 +178,6 @@ full test run:
 - `backend/tests/jwt_test.php` + `backend/tests/http_test.sh` — auth/health foundation
 - `backend/tests/upload_validator_test.php` + `backend/tests/book_test.sh` — book management (create → publish → cover/index/preview-pages/PDF uploads → public response shape/privacy → edit/unpublish/archive → role separation → invalid-file rejection)
 
-- `backend/tests/{money_pricing,address_validator,signature_gateway,order_fulfillment,codes,reconciler,race,middleware,refund,reader}_test.php` + `backend/tests/order_test.sh` — SP-5 orders, Razorpay, access codes, tracking, reconcile, refunds, secure reader (run the PHP ones with `docker compose exec -T php php tests/<file>.php`)
+- `backend/tests/{money_pricing,address_validator,signature_gateway,order_fulfillment,codes,reconciler,race,middleware,refund,reader,admin_authz}_test.php` + `backend/tests/order_test.sh` — SP-5 orders, Razorpay, access codes, tracking, reconcile, refunds, secure reader, admin API (run the PHP ones with `docker compose exec -T php php tests/<file>.php`)
 
 Re-run any of them against a live `docker compose up` stack any time to re-verify.

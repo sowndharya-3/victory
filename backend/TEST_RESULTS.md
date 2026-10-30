@@ -139,3 +139,16 @@ Run date: 2026-10-30, after migration 005 and the php image rebuild with `popple
 | book_test.sh / http_test.sh | 25/25, 23/23 |
 
 Books 1 and 2: `/api/books`, `/api/books/1`, `/api/books/2` responses and both PDFs md5-identical before/after. Test rows removed (book_test/http_test leftovers of this run too); book 2's page cache (`storage/books/2/pages`, gitignored) left in place.
+
+## Task 19: Admin backend (dashboard, orders, customers, codes, fulfilment, audit)
+
+Run date: 2026-10-30, after migration 006 (audit_logs `(entity_type, entity_id)` index).
+
+| Suite | Result |
+|---|---|
+| admin_authz_test.php (new) | 63 passed, 0 failed (10 Task 19 routes registered; all 26 admin routes from routes.php: 401 without token, 403 with a customer token) |
+| order_test.sh | 235 passed, 0 failed (190 + §9: dashboard equals SQL and seeded deltas, search by order number / email / name / phone / tracking code / full code / last4, literal `%` `_`, filters, paging, detail, fulfilment chain + illegal moves + courier rule + digital/unpaid 400 + customer and tracking page see it at once, verify/revoke/reissue, old code `code_revoked`, new code redeems, audit rows, no plaintext/hash/code_enc in admin JSON, verify limit 31st 429) |
+| reader 33, refund 69, reconciler 25, codes 56, order_fulfillment 27, money_pricing 14, signature_gateway 27, address_validator 14, middleware 5, jwt 6, upload_validator 3, race 1 | all passed, 0 failed |
+| book_test.sh / http_test.sh | 25/25, 23/23 |
+
+Books 1 and 2: `/api/books` byte-identical before/after. Test rows removed (order_test cleans itself; this run's book_test/http_test book and users deleted).
