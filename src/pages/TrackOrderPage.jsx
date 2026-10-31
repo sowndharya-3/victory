@@ -30,7 +30,7 @@ function TrackOrderPage() {
   return (
     <>
       <Header />
-      <div className="container" style={{ padding: '2rem 0' }}>
+      <div className="container" style={{ paddingTop: '2rem', paddingBottom: '2rem' }}>
         <h2>Track your order</h2>
         <form onSubmit={submit}>
           <label htmlFor="track-code">Tracking code</label>

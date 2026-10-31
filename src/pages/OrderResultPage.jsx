@@ -9,7 +9,7 @@ const POLL_MS = 3000
 const GIVE_UP_MS = 60000
 
 function Shell({ children }) {
-  return <><Header /><div className="container" style={{ padding: '2rem 0' }}>{children}</div><Footer /></>
+  return <><Header /><div className="container" style={{ paddingTop: '2rem', paddingBottom: '2rem' }}>{children}</div><Footer /></>
 }
 
 // Paying never unlocks the book: the owner redeems their code (shown here, never stored in the browser).

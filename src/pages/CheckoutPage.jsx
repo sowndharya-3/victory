@@ -128,7 +128,7 @@ function CheckoutPage() {
   return (
     <>
       <Header />
-      <section className="container" style={{ padding: '2rem 0' }}>
+      <section className="container" style={{ paddingTop: '2rem', paddingBottom: '2rem' }}>
         <h2>Checkout: {book.title}</h2>
 
         <form onSubmit={handlePay}>

@@ -7,7 +7,7 @@ import Header from '../components/home/Header'
 import ReaderViewer from '../components/reader/ReaderViewer'
 
 function Shell({ children }) {
-  return <><Header /><div className="container" style={{ padding: '2rem 0' }}>{children}</div></>
+  return <><Header /><div className="container" style={{ paddingTop: '2rem', paddingBottom: '2rem' }}>{children}</div></>
 }
 
 function ReaderPage() {

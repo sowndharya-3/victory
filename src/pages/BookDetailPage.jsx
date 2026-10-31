@@ -33,8 +33,8 @@ function BookDetailPage() {
   return (
     <>
       <Header />
-      <section className="container" style={{ padding: '2rem 0' }}>
-        <img src={book.coverUrl} alt={book.title} />
+      <section className="container" style={{ paddingTop: '2rem', paddingBottom: '2rem' }}>
+        <img src={book.coverUrl} alt={book.title} className="book-detail-cover" />
         <h2>{book.title}</h2>
         <p>{book.description}</p>
         <p>Type: {book.type}</p>

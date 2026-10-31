@@ -6,7 +6,7 @@ import Header from '../components/home/Header'
 import Footer from '../components/home/Footer'
 
 function Shell({ children }) {
-  return <><Header /><div className="container" style={{ padding: '2rem 0' }}>{children}</div><Footer /></>
+  return <><Header /><div className="container" style={{ paddingTop: '2rem', paddingBottom: '2rem' }}>{children}</div><Footer /></>
 }
 
 function Cover({ book }) {

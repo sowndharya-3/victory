@@ -48,7 +48,7 @@ function ReferralRegisterPage() {
   return (
     <>
       <Header />
-      <section className="container" style={{ padding: '2rem 0' }}>
+      <section className="container" style={{ paddingTop: '2rem', paddingBottom: '2rem' }}>
         <h2>Become a Referral Partner</h2>
         {submitted ? (
           <p>Registration received. Our team will review and approve your account shortly.</p>
