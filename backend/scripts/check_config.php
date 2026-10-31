@@ -1,6 +1,6 @@
 <?php
 /**
- * Deploy-time configuration check. CLI only. Prints PASS / WARN / FAIL per item, never a secret value.
+ * Deploy-time configuration check. CLI only. Prints PASS / WARN / FAIL (INFO never fails) per item, never a secret value.
  *   php backend/scripts/check_config.php        (in Docker: docker compose exec php php scripts/check_config.php)
  * Exit code 1 when any item FAILs.
  */
@@ -22,6 +22,7 @@ spl_autoload_register(function (string $class) {
 
 use App\Database\Db;
 use App\Razorpay\Config;
+use App\Support\ClientIp;
 use App\Support\Env;
 
 $fails = 0;
@@ -63,6 +64,15 @@ $isOrigin = is_array($parts) && isset($parts['scheme'], $parts['host']) && !isse
 ok($isOrigin, 'FRONTEND_ORIGIN is a bare origin (scheme://host[:port], no path or trailing slash)');
 if ($isOrigin) {
     ok($parts['scheme'] === 'https', 'FRONTEND_ORIGIN uses https', $dev ? 'WARN' : 'FAIL');
+}
+
+$proxies = trim((string) getenv('TRUSTED_PROXIES'));
+if ($proxies === '') {
+    item('INFO', 'TRUSTED_PROXIES empty: rate limits key on REMOTE_ADDR (right when nothing sits in front of the API, or the web server fixes REMOTE_ADDR via set_real_ip_from / mod_remoteip)');
+} else {
+    $valid = count(ClientIp::parseList($proxies));
+    $bad = ClientIp::invalidEntries($proxies);
+    item('INFO', "TRUSTED_PROXIES set ($valid valid, $bad invalid ignored): X-Forwarded-For is trusted only from those peers");
 }
 
 try {

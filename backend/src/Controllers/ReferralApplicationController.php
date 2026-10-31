@@ -5,6 +5,7 @@ namespace App\Controllers;
 use App\Database\Db;
 use App\Http\ApiException;
 use App\Orders\AddressValidator;
+use App\Support\ClientIp;
 use App\Support\RateLimiter;
 
 /** Public partner sign-up. Stored in referral_applications; an admin approval creates the referral_partners row. */
@@ -38,8 +39,8 @@ class ReferralApplicationController
         $data = json_decode($raw, true);
         $row = self::validate(is_array($data) ? $data : [], array_keys(self::FIELDS), false);
         // Counted after validation: typo fixes are free, only well-formed submissions use the 5/hour budget.
-        // REMOTE_ADDR is nginx's peer address (no X-Forwarded-For trust), so it cannot be spoofed by a header.
-        RateLimiter::hit('referral-apply:' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'), 5, 3600);
+        // ClientIp trusts X-Forwarded-For only from TRUSTED_PROXIES, so a client cannot spoof its bucket with a header.
+        RateLimiter::hit('referral-apply:' . ClientIp::bucket(), 5, 3600);
 
         $db = Db::connection();
         // Fast path; uq_open_application (migration 008) is the real guard against simultaneous submissions.

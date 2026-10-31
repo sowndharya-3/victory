@@ -511,6 +511,15 @@ for i in $(seq 1 11); do
 done
 check "track: 10 lookups a minute -> 404 each, 11th -> 429" "$([ "$CODES" = " 404 404 404 404 404 404 404 404 404 404 429" ] && echo true || echo false)"
 sql "DELETE FROM rate_limits WHERE bucket LIKE 'track:%';"
+# Spoofing: rotating X-Forwarded-For (no TRUSTED_PROXIES in dev) never gives a fresh bucket.
+SEC=$((10#$(date +%S)))
+[ "$SEC" -gt 45 ] && sleep $((61 - SEC))
+CODES=""
+for i in $(seq 1 11); do
+  CODES="$CODES $(curl -s -o /dev/null -w '%{http_code}' -H "X-Forwarded-For: 1.2.3.$i" "$BASE_URL/api/track/VTT-00000000")"
+done
+check "track: rotating X-Forwarded-For still 429 on the 11th, no 1.2.3.x bucket" "$([ "$CODES" = " 404 404 404 404 404 404 404 404 404 404 429" ] && [ "$(sql "SELECT COUNT(*) FROM rate_limits WHERE bucket LIKE 'track:1.2.3.%';")" = "0" ] && echo true || echo false)"
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'track:%';"
 
 echo "=== 7. Refunds ==="
 # Reader 403 after refund arrives with Task 17; here: book_access revoked + library shows it.

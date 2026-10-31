@@ -6,6 +6,7 @@ use App\Auth\Jwt;
 use App\Auth\Password;
 use App\Database\Db;
 use App\Http\ApiException;
+use App\Support\ClientIp;
 use App\Support\RateLimiter;
 use App\Validation\Validator;
 use PDOException;
@@ -69,7 +70,7 @@ class AuthController
         // Failed attempts only, per account (hashed normalised email, existing or not) and per IP.
         $account = sha1(strtolower(trim(is_string($data['email']) ? $data['email'] : '')));
         $user = RateLimiter::failuresOnly(
-            ['login-user:' . $account => 10, 'login-ip:' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown') => 30],
+            ['login-user:' . $account => 10, 'login-ip:' . ClientIp::bucket() => 30],
             900,
             function () use ($data) {
                 $stmt = Db::connection()->prepare('SELECT id, name, email, password_hash FROM users WHERE email = :email');

@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use App\Database\Db;
 use App\Http\ApiException;
+use App\Support\ClientIp;
 use App\Support\RateLimiter;
 
 /** Public hard-copy status lookup. Never returns address, email or any digital code. */
@@ -20,7 +21,7 @@ class TrackController
 
     public function show(string $code): void
     {
-        RateLimiter::hit('track:' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'), 10, 60);
+        RateLimiter::hit('track:' . ClientIp::bucket(), 10, 60);
         $notFound = new ApiException('Tracking code not found', 404, 'not_found');
         $code = strtoupper(trim($code));
         if (!preg_match('/^VTT-[0-9A-HJKMNP-TV-Z]{8}$/', $code)) {

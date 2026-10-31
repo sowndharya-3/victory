@@ -6,6 +6,7 @@ use App\Codes\AccessCodeService;
 use App\Database\Db;
 use App\Http\ApiException;
 use App\Middleware\AuthMiddleware;
+use App\Support\ClientIp;
 use App\Support\RateLimiter;
 
 class AccessCodeController
@@ -25,7 +26,7 @@ class AccessCodeController
     {
         $payload = AuthMiddleware::requireRole(['customer']);
         $userId = (int) $payload['sub'];
-        $buckets = ['code-redeem-user:' . $userId => 5, 'code-redeem-ip:' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown') => 20];
+        $buckets = ['code-redeem-user:' . $userId => 5, 'code-redeem-ip:' . ClientIp::bucket() => 20];
         // Only failed attempts count: reserve a slot in each bucket, give it back on success.
         $reserved = [];
         try {

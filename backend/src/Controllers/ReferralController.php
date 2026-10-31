@@ -3,13 +3,14 @@
 namespace App\Controllers;
 
 use App\Referral\ReferralService;
+use App\Support\ClientIp;
 use App\Support\RateLimiter;
 
 class ReferralController
 {
     public function validate(string $code): void
     {
-        RateLimiter::hit('referral-validate:' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'), 30, 60);
+        RateLimiter::hit('referral-validate:' . ClientIp::bucket(), 30, 60);
         // Empty buyer email: no self-referral check at preview time (checked again at order creation).
         $partner = ReferralService::resolve(urldecode($code), '');
         if (!$partner) {
