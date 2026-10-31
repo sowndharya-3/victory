@@ -41,7 +41,7 @@ class CodeCipher
     private static function key(string $purpose): string
     {
         $secret = (string) getenv('CODE_SECRET');
-        if (strlen($secret) < 32 || stripos($secret, 'changeme') !== false) {
+        if (\App\Support\Env::weakSecret($secret, 32)) { // in every APP_ENV, dev included
             throw new RuntimeException('CODE_SECRET must be set to a real value of at least 32 bytes');
         }
         return hash_hmac('sha256', $purpose, $secret, true);

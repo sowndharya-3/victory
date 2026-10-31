@@ -77,11 +77,48 @@ setEnv(['RAZORPAY_GATEWAY' => 'live', 'RAZORPAY_KEY_ID' => 'rzp_test_changeme', 
 assertTrue(throwsRuntime(fn() => Config::load()), 'config: live + changeme key id throws');
 setEnv(['RAZORPAY_GATEWAY' => 'live', 'RAZORPAY_KEY_ID' => 'k', 'RAZORPAY_KEY_SECRET' => 'x', 'RAZORPAY_WEBHOOK_SECRET' => '']);
 assertTrue(throwsRuntime(fn() => Config::load()), 'config: live + empty webhook secret throws');
-setEnv(['RAZORPAY_GATEWAY' => 'live', 'RAZORPAY_KEY_ID' => 'k', 'RAZORPAY_KEY_SECRET' => 'x', 'RAZORPAY_WEBHOOK_SECRET' => 'y']);
+$strong = ['RAZORPAY_KEY_ID' => 'rzp_live_AbC123xyz', 'RAZORPAY_KEY_SECRET' => 'k8Jd02LmQp3Zr7Tw9Xy4Vb1N', 'RAZORPAY_WEBHOOK_SECRET' => str_repeat('a1B2', 8)];
+setEnv(['RAZORPAY_GATEWAY' => 'live', 'APP_ENV' => 'development', 'RAZORPAY_KEY_ID' => 'rzp_test_abc123', 'RAZORPAY_KEY_SECRET' => 'x', 'RAZORPAY_WEBHOOK_SECRET' => 'y']);
 $c = Config::load();
-assertTrue($c['mode'] === 'live' && $c['keyId'] === 'k' && $c['keySecret'] === 'x' && $c['webhookSecret'] === 'y', 'config: live with real values loads');
-setEnv(['RAZORPAY_KEY_ID' => 'k', 'RAZORPAY_KEY_SECRET' => 'x', 'RAZORPAY_WEBHOOK_SECRET' => 'y']);
-assertTrue(Config::load()['mode'] === 'live', 'config: unset RAZORPAY_GATEWAY treated as live');
+assertTrue($c['mode'] === 'live' && $c['keyId'] === 'rzp_test_abc123' && $c['keySecret'] === 'x' && $c['webhookSecret'] === 'y', 'config: dev + live with short non-placeholder values loads');
+setEnv($strong);
+assertTrue(Config::load()['mode'] === 'live', 'config: unset RAZORPAY_GATEWAY and unset APP_ENV -> live, strong secrets load');
+
+// APP_ENV allow-list (exact, case-sensitive) x gateway x secrets
+foreach (['development', 'dev', 'local', 'test', 'testing'] as $env) {
+    setEnv(['RAZORPAY_GATEWAY' => 'fake', 'APP_ENV' => $env]);
+    assertTrue(!throwsRuntime(fn() => Config::load()), "config: fake allowed with APP_ENV=$env");
+}
+foreach ([null, '', 'production', 'Production', ' production', 'prod', 'staging', 'DEVELOPMENT', 'development ', 'devel', 'test1'] as $env) {
+    setEnv(['RAZORPAY_GATEWAY' => 'fake'] + ($env === null ? [] : ['APP_ENV' => $env]));
+    assertTrue(throwsRuntime(fn() => Config::load()), 'config: fake refused with APP_ENV=' . json_encode($env));
+}
+$prod = ['RAZORPAY_GATEWAY' => 'live', 'APP_ENV' => 'production'];
+setEnv($prod + $strong);
+assertTrue(Config::load()['keyId'] === 'rzp_live_AbC123xyz', 'config: production + live + strong secrets loads');
+$weak = [
+    'key id without rzp_ prefix' => ['RAZORPAY_KEY_ID' => 'key_live_AbC123xyz'],
+    'key id rzp_other_' => ['RAZORPAY_KEY_ID' => 'rzp_prod_AbC123xyz'],
+    'key id placeholder' => ['RAZORPAY_KEY_ID' => 'rzp_test_changeme'],
+    'key secret "changeme" padded' => ['RAZORPAY_KEY_SECRET' => 'changeme-changeme-changeme'],
+    'key secret 19 chars' => ['RAZORPAY_KEY_SECRET' => 'k8Jd02LmQp3Zr7Tw9Xy'],
+    'webhook secret 31 chars' => ['RAZORPAY_WEBHOOK_SECRET' => substr(str_repeat('a1B2', 8), 1)],
+    'webhook secret "your-" template' => ['RAZORPAY_WEBHOOK_SECRET' => 'your-webhook-secret-0123456789abcdef'],
+    'webhook secret change-me' => ['RAZORPAY_WEBHOOK_SECRET' => 'change-me-0123456789abcdef0123456789'],
+    'webhook secret empty' => ['RAZORPAY_WEBHOOK_SECRET' => ''],
+];
+foreach ($weak as $label => $override) {
+    setEnv(array_merge($prod, $strong, $override));
+    $msg = '';
+    try {
+        Config::load();
+    } catch (RuntimeException $e) {
+        $msg = $e->getMessage();
+    }
+    $value = (string) reset($override);
+    assertTrue($msg !== '' && ($value === '' || !str_contains($msg, $value)), "config: production + $label -> refused, value not in message");
+}
+assertTrue(\App\Support\Env::weakSecret(str_repeat('ab', 16), 32) === false && \App\Support\Env::weakSecret(str_repeat('ab', 15) . 'a', 32) === true, 'Env::weakSecret: 32 ok, 31 weak');
 setEnv([]);
 assertTrue(throwsRuntime(fn() => Config::load()), 'config: unset gateway + no keys throws (live)');
 setEnv(['RAZORPAY_GATEWAY' => 'fake', 'APP_ENV' => 'production']);
@@ -113,7 +150,7 @@ try {
 }
 // ponytail: DB-backed fetchPayment amount lookup (payments.amount x 100) not unit-tested; needs orders+users fixtures, covered by Task 6+ HTTP tests.
 
-setEnv(['RAZORPAY_GATEWAY' => 'live', 'RAZORPAY_KEY_ID' => 'k', 'RAZORPAY_KEY_SECRET' => 'x', 'RAZORPAY_WEBHOOK_SECRET' => 'y']);
+setEnv(['RAZORPAY_GATEWAY' => 'live'] + $strong);
 assertTrue(GatewayFactory::make() instanceof App\Razorpay\RazorpayGateway, 'factory: live mode returns RazorpayGateway');
 setEnv(['RAZORPAY_GATEWAY' => 'fake', 'APP_ENV' => 'production']);
 assertTrue(throwsRuntime(fn() => GatewayFactory::make()), 'factory: fake in production throws');

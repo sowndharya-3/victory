@@ -63,8 +63,8 @@ class Jwt
 
     private static function secret(): string
     {
-        $secret = getenv('JWT_SECRET');
-        if (!$secret || strlen($secret) < 32 || $secret === 'changeme-generate-a-real-random-secret') {
+        $secret = (string) getenv('JWT_SECRET');
+        if (\App\Support\Env::weakSecret($secret, 32)) { // in every APP_ENV, dev included
             throw new \RuntimeException('JWT_SECRET is not configured securely — see backend/README.md');
         }
         return $secret;

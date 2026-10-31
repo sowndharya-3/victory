@@ -85,6 +85,8 @@ BAD_ADMIN_LOGIN=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"wrongpassword"}')
 check "admin wrong password returns 401" "$([ "$BAD_ADMIN_LOGIN" = "401" ] && echo true || echo false)"
+# Login throttling counts failures per account/IP for 15 min: drop this run's so repeated runs never lock out "admin".
+docker compose exec -T mysql mysql -u vtee -pchangeme vtee -e "DELETE FROM rate_limits WHERE bucket LIKE 'login-%' OR bucket LIKE 'admin-login-%';" >/dev/null 2>&1
 
 echo "=== 8b. Validation ==="
 MISSING_PASSWORD=$(curl -s -o /tmp/validation.json -w "%{http_code}" -X POST "$BASE_URL/api/auth/register" \

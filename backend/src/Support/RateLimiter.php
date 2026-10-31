@@ -26,6 +26,29 @@ class RateLimiter
             ->execute([$bucket, self::window($windowSeconds)]);
     }
 
+    /**
+     * Runs $attempt under failure-only limits ($buckets: bucket => max per window). A slot is reserved in every
+     * bucket first and given back when the attempt succeeds or when a bucket was already full (no attempt made).
+     */
+    public static function failuresOnly(array $buckets, int $windowSeconds, callable $attempt): mixed
+    {
+        $reserved = [];
+        try {
+            foreach ($buckets as $bucket => $max) {
+                self::hit($bucket, $max, $windowSeconds);
+                $reserved[] = $bucket;
+            }
+            $result = $attempt();
+        } catch (ApiException $e) {
+            if ($e->errorCode === 'rate_limited') {
+                array_map(fn ($b) => self::release($b, $windowSeconds), $reserved);
+            }
+            throw $e;
+        }
+        array_map(fn ($b) => self::release($b, $windowSeconds), $reserved);
+        return $result;
+    }
+
     private static function record(string $bucket, int $windowSeconds): void
     {
         Db::connection()->prepare('INSERT INTO rate_limits (bucket, window_start, hits) VALUES (?, ?, 1) ON DUPLICATE KEY UPDATE hits = hits + 1')

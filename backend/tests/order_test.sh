@@ -72,7 +72,7 @@ cleanup() {
   [ -n "${AUDIT0:-}" ] && sql "DELETE FROM audit_logs WHERE id > $AUDIT0 AND entity_type IN ('settings','referral_application','referral_partner','commission');"
   sql "DELETE FROM referral_partners WHERE gmail LIKE 'reftest-%@example.com' OR application_id IN (SELECT id FROM referral_applications WHERE gmail LIKE 'reftest-%@example.com');
        DELETE FROM referral_applications WHERE gmail LIKE 'reftest-%@example.com';
-       DELETE FROM rate_limits WHERE bucket LIKE 'referral-apply:%';"
+       DELETE FROM rate_limits WHERE bucket LIKE 'referral-apply:%' OR bucket LIKE 'login-%' OR bucket LIKE 'admin-login-%';"
 }
 trap cleanup EXIT
 
@@ -1093,6 +1093,36 @@ Q=$(curl -s "$BASE_URL/api/checkout/quote?bookId=$BOOK_ID&type=hardcopy")
 check "pricing PUT 200; quote: 349 + 40 shipping + 5% exclusive = 408.45" "$([ "$S1" = "200" ] && jh "$U" '"shippingChargeHardcopy":"40\.00"' && jh "$Q" '"gst":19\.45,"gstPercent":5(\.0)?,"gstMode":"exclusive","total":408\.45' && echo true || echo false)"
 sql "$SAVED_SQL"
 check "every admin change audited (approve, reject, toggle x2, partner edit, rates x2, payable, paid, pricing)" "$([ "$(sql "SELECT GROUP_CONCAT(CONCAT(action,':',n) ORDER BY action) FROM (SELECT action, COUNT(*) n FROM audit_logs WHERE id > $AUDIT0 AND action IN ('referral.approve','referral.reject','partner.toggle_active','partner.update','settings.commission','commission.payable','commission.paid','settings.pricing') GROUP BY action) t")" = "commission.paid:1,commission.payable:1,partner.toggle_active:2,partner.update:1,referral.approve:1,referral.reject:1,settings.commission:2,settings.pricing:1" ] && echo true || echo false)"
+echo "=== 11. Login throttling ==="
+login() { # $1 path $2 json -> LCODE, L
+  LCODE=$(curl -s -o "$TMP/l.json" -w '%{http_code}' -X POST "$BASE_URL$1" -H "Content-Type: application/json" -d "$2"); L=$(cat "$TMP/l.json")
+}
+INTO=$(( $(date +%s) % 900 )); [ "$INTO" -gt 860 ] && sleep $((901 - INTO))
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'login-%' OR bucket LIKE 'admin-login-%';"
+EMAIL_T="ordertest-t-$STAMP@example.com"; EMAIL_U="ordertest-u-$STAMP@example.com"
+read -r TOKEN_T UID_T <<<"$(register "$EMAIL_T")"
+read -r TOKEN_U UID_U <<<"$(register "$EMAIL_U")"
+CODES=""; for i in $(seq 1 10); do login /api/auth/login "{\"email\":\"$EMAIL_T\",\"password\":\"wrong$i\"}"; CODES="$CODES$LCODE "; done
+login /api/auth/login "{\"email\":\" $(echo "$EMAIL_T" | tr a-z A-Z)\",\"password\":\"password123\"}"; C11=$LCODE; B11=$L
+check "customer: 10 wrong passwords 401, then 429 rate_limited even with the right password (case/space variant of the email)" "$([ "$CODES" = "$(printf '401 %.0s' $(seq 1 10))" ] && [ "$C11" = "429" ] && jh "$B11" '"code":"rate_limited"' && echo true || echo false)"
+for i in $(seq 1 10); do login /api/auth/login "{\"email\":\"ordertest-nobody-$STAMP@example.com\",\"password\":\"wrong\"}"; done
+login /api/auth/login "{\"email\":\"ordertest-nobody-$STAMP@example.com\",\"password\":\"wrong\"}"
+check "unknown account throttled identically (same 429 body; existence not revealed)" "$([ "$LCODE" = "429" ] && [ "$L" = "$B11" ] && echo true || echo false)"
+login /api/auth/login "{\"email\":\"$EMAIL_U\",\"password\":\"password123\"}"; C1=$LCODE
+login /api/auth/login "{\"email\":\"$EMAIL_U\",\"password\":\"password123\"}"
+check "another customer from the same IP is not locked out; successes are not counted" "$([ "$C1" = "200" ] && [ "$LCODE" = "200" ] && [ "$(sql "SELECT COALESCE(SUM(hits),0) FROM rate_limits WHERE bucket=CONCAT('login-user:', SHA1('$EMAIL_U'))")" = "0" ] && echo true || echo false)"
+login /api/admin/login "{\"username\":\"$EMAIL_T\",\"password\":\"x\"}"; C1=$LCODE
+for i in 1 2 3 4 5; do login /api/admin/login "{\"username\":\"ordertest-adm-$STAMP\",\"password\":\"wrong\"}"; done; C5=$LCODE
+login /api/admin/login "{\"username\":\"ordertest-adm-$STAMP\",\"password\":\"wrong\"}"; C6=$LCODE
+login /api/admin/login '{"username":"admin","password":"adminpass123"}'
+check "admin buckets separate from customer ones; admin account: 5 failures then 429; real admin still logs in" "$([ "$C1" = "401" ] && [ "$C5" = "401" ] && [ "$C6" = "429" ] && [ "$LCODE" = "200" ] && echo true || echo false)"
+IPB=$(sql "SELECT bucket FROM rate_limits WHERE bucket LIKE 'login-ip:%' ORDER BY hits DESC LIMIT 1")
+sql "UPDATE rate_limits SET hits=30 WHERE bucket='$IPB';"
+login /api/auth/login "{\"email\":\"$EMAIL_U\",\"password\":\"password123\"}"; C1=$LCODE
+login /api/admin/login '{"username":"admin","password":"adminpass123"}'
+check "customer IP bucket full (30) -> 429 for everyone on that IP; admin login (own IP bucket) unaffected" "$([ -n "$IPB" ] && [ "$C1" = "429" ] && [ "$LCODE" = "200" ] && echo true || echo false)"
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'login-%' OR bucket LIKE 'admin-login-%';"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -gt 0 ] && exit 1
