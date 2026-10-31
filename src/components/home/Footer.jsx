@@ -43,22 +43,22 @@ function Footer() {
             <div className="footer-col fade-in" style={{ transitionDelay: '0.1s' }}>
               <h3>Quick Links</h3>
               <ul>
-                <li><a href="#home">Home</a></li>
-                <li><a href="#founder">Founder</a></li>
-                <li><a href="#services">Services</a></li>
-                <li><a href="#mission-vision">Mission & Vision</a></li>
-                <li><a href="#contact">Contact</a></li>
+                <li><a href="/#home">Home</a></li>
+                <li><a href="/#founder">Founder</a></li>
+                <li><a href="/#services">Services</a></li>
+                <li><a href="/#mission-vision">Mission & Vision</a></li>
+                <li><a href="/#contact">Contact</a></li>
               </ul>
             </div>
 
             <div className="footer-col fade-in" style={{ transitionDelay: '0.2s' }}>
               <h3>Our Services</h3>
               <ul>
-                <li><a href="#services">Distance Education</a></li>
-                <li><a href="#services">Regular Education</a></li>
-                <li><a href="#services">Research & Development</a></li>
-                <li><a href="#services">Competitive Exams</a></li>
-                <li><a href="#services">Guidance & Counselling</a></li>
+                <li><a href="/#services">Distance Education</a></li>
+                <li><a href="/#services">Regular Education</a></li>
+                <li><a href="/#services">Research & Development</a></li>
+                <li><a href="/#services">Competitive Exams</a></li>
+                <li><a href="/#services">Guidance & Counselling</a></li>
               </ul>
             </div>
 
