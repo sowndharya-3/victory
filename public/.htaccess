@@ -23,7 +23,14 @@
 <IfModule mod_headers.c>
   Header always set X-Content-Type-Options "nosniff"
   Header always set Referrer-Policy "strict-origin-when-cross-origin"
-  Header always set X-Frame-Options "SAMEORIGIN"
+  Header always set X-Frame-Options "DENY"
+  Header always set Permissions-Policy 'camera=(), microphone=(), geolocation=(), payment=(self "https://checkout.razorpay.com" "https://api.razorpay.com")'
+  # Report-Only: violations are logged in the browser console, nothing is blocked. Enforce after a clean week:
+  # rename to Content-Security-Policy. https://API_ORIGIN_PLACEHOLDER is replaced at build time by the origin of
+  # VITE_API_URL (vite.apiUrlCheck.js); the built dist/.htaccess never contains it. Keep in sync with public/_headers.
+  Header always set Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' https://checkout.razorpay.com https://cdn.razorpay.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; font-src 'self' data: https://cdnjs.cloudflare.com https://fonts.gstatic.com; img-src 'self' data: blob: https://API_ORIGIN_PLACEHOLDER https://images.unsplash.com https://via.placeholder.com https://*.razorpay.com; connect-src 'self' https://API_ORIGIN_PLACEHOLDER https://*.razorpay.com; frame-src https://API_ORIGIN_PLACEHOLDER https://api.razorpay.com https://checkout.razorpay.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+  # HSTS: enable only once HTTPS works on this exact host; start low and raise (300 -> 86400 -> 15552000).
+  # Header always set Strict-Transport-Security "max-age=300" "expr=%{HTTPS} == 'on'"
   # index.html is revalidated on every load so a new deploy is picked up at once.
   <FilesMatch "^index\.html$">
     Header set Cache-Control "no-cache"

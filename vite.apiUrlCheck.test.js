@@ -1,4 +1,4 @@
-import { apiUrlProblem, apiUrlCheck } from './vite.apiUrlCheck'
+import { apiUrlProblem, apiUrlCheck, withApiOrigin } from './vite.apiUrlCheck'
 
 test('missing, localhost and invalid URLs are problems', () => {
   expect(apiUrlProblem(undefined)).toMatch(/not set/)
@@ -20,4 +20,11 @@ test('plugin only throws for a production build', () => {
   expect(() => p.config({}, { command: 'serve', mode: 'development' })).not.toThrow()
   expect(() => p.config({}, { command: 'serve', mode: 'test' })).not.toThrow()
   expect(() => p.config({}, { command: 'build', mode: 'staging' })).not.toThrow()
+})
+
+test('withApiOrigin swaps the placeholder for the API origin only', () => {
+  const t = "img-src 'self' https://API_ORIGIN_PLACEHOLDER; connect-src https://API_ORIGIN_PLACEHOLDER"
+  expect(withApiOrigin(t, 'https://api.example.com/')).toBe("img-src 'self' https://api.example.com; connect-src https://api.example.com")
+  expect(withApiOrigin(t, 'http://localhost:8080')).toContain('http://localhost:8080')
+  expect(withApiOrigin(t, undefined)).not.toContain('PLACEHOLDER')
 })
