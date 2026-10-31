@@ -15,6 +15,7 @@ function AdminBooksPage() {
   const [hardCopyPrice, setHardCopyPrice] = useState('')
   const [editingId, setEditingId] = useState(null)
   const [editTitle, setEditTitle] = useState('')
+  const [editDescription, setEditDescription] = useState('')
 
   const load = async () => {
     setLoading(true)
@@ -56,12 +57,13 @@ function AdminBooksPage() {
   const startEdit = (book) => {
     setEditingId(book.id)
     setEditTitle(book.title)
+    setEditDescription(book.description || '')
   }
 
   const handleSaveEdit = (e) => {
     e.preventDefault()
     withBusy(async () => {
-      await updateBook(token, editingId, { title: editTitle })
+      await updateBook(token, editingId, { title: editTitle, description: editDescription })
       setEditingId(null)
     })
   }
@@ -109,6 +111,8 @@ function AdminBooksPage() {
                   <form onSubmit={handleSaveEdit}>
                     <label htmlFor={`edit-title-${book.id}`}>Edit Title</label>
                     <input id={`edit-title-${book.id}`} className="form-control" value={editTitle} onChange={e => setEditTitle(e.target.value)} required />
+                    <label htmlFor={`edit-description-${book.id}`}>Edit Description</label>
+                    <textarea id={`edit-description-${book.id}`} className="form-control" rows={4} value={editDescription} onChange={e => setEditDescription(e.target.value)} />
                     <button type="submit" disabled={busy}>Save Changes</button>
                     <button type="button" onClick={() => setEditingId(null)}>Cancel</button>
                   </form>
