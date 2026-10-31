@@ -108,9 +108,9 @@ Phone, WhatsApp and UPI are deliberately not unique (families/institutions share
 
 | GET | /api/admin/books | admin | All books, any status, with `hasCover/hasIndex/hasPdf/previewPageCount` |
 | GET | /api/admin/books/:id | admin | One book, any status |
-| POST | /api/admin/books | admin | `{title, description?, category?, onlinePrice, hardcopyPrice}` → 201 |
-| PUT | /api/admin/books/:id | admin | Partial update of any metadata field |
-| POST | /api/admin/books/:id/publish | admin | sets published=1 |
+| POST | /api/admin/books | admin | `{title, description?, category?, onlinePrice, hardcopyPrice}` → 201. Title 1–255 chars and category ≤100 (Unicode-trimmed, no control characters), description ≤65535 bytes UTF-8 (line breaks/tabs allowed), prices 0–100000 with ≤2 decimals (number or string); else 400 `validation_error` with `fields` |
+| PUT | /api/admin/books/:id | admin | Partial update of any metadata field, same rules as create (body must be a JSON object); a published book cannot get a price below 1 |
+| POST | /api/admin/books/:id/publish | admin | sets published=1; 400 `validation_error` unless both prices are ≥ 1 (a PDF is not required: it can be uploaded after publishing) |
 | POST | /api/admin/books/:id/unpublish | admin | sets published=0 |
 | POST | /api/admin/books/:id/archive | admin | sets archived=1, published=0 |
 | POST | /api/admin/books/:id/cover | admin | multipart `file` (image, max 5MB) → `{coverUrl}` |

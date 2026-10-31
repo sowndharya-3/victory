@@ -6,6 +6,7 @@ use App\Database\Db;
 use App\Http\ApiException;
 use App\Middleware\AuthMiddleware;
 use App\Reader\PdfPageRenderer;
+use App\Support\Money;
 use App\Upload\FileValidator;
 use App\Validation\Validator;
 
@@ -34,21 +35,17 @@ class AdminBookController
     public function create(): void
     {
         AuthMiddleware::requireRole(['admin']);
-        $data = json_decode(file_get_contents('php://input'), true) ?? [];
+        $data = json_decode(file_get_contents('php://input'), true);
+        $data = is_array($data) ? $data : [];
         Validator::required($data, ['title', 'onlinePrice', 'hardcopyPrice']);
+        $row = self::validateFields($data) + ['description' => null, 'category' => null];
 
         $db = Db::connection();
         $stmt = $db->prepare(
             'INSERT INTO books (title, description, category, online_price, hardcopy_price, published, archived)
              VALUES (:title, :description, :category, :online_price, :hardcopy_price, 0, 0)'
         );
-        $stmt->execute([
-            'title' => $data['title'],
-            'description' => $data['description'] ?? null,
-            'category' => $data['category'] ?? null,
-            'online_price' => $data['onlinePrice'],
-            'hardcopy_price' => $data['hardcopyPrice'],
-        ]);
+        $stmt->execute($row);
 
         $id = (string)$db->lastInsertId();
         http_response_code(201);
@@ -58,22 +55,16 @@ class AdminBookController
     public function update(string $id): void
     {
         AuthMiddleware::requireRole(['admin']);
-        $this->findOrFail($id);
-        $data = json_decode(file_get_contents('php://input'), true) ?? [];
-
-        $fields = [];
-        $params = ['id' => $id];
-        foreach ([
-            'title' => 'title', 'description' => 'description', 'category' => 'category',
-            'onlinePrice' => 'online_price', 'hardcopyPrice' => 'hardcopy_price',
-        ] as $key => $column) {
-            if (array_key_exists($key, $data)) {
-                $fields[] = "{$column} = :{$column}";
-                $params[$column] = $data[$key];
-            }
+        $book = $this->findOrFail($id);
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($data) || ($data && array_is_list($data))) {
+            throw new ApiException('Validation failed', 400, 'validation_error', ['body' => 'Must be a JSON object']);
         }
-        if ($fields) {
-            Db::connection()->prepare('UPDATE books SET ' . implode(', ', $fields) . ' WHERE id = :id')->execute($params);
+        $row = self::validateFields($data);
+        self::requireSellable($row + $book); // a published book must stay sellable (same rule as publish)
+        if ($row) {
+            $set = implode(', ', array_map(fn($c) => "{$c} = :{$c}", array_keys($row)));
+            Db::connection()->prepare("UPDATE books SET {$set} WHERE id = :id")->execute($row + ['id' => $id]);
         }
 
         echo json_encode(self::formatAdmin($this->findOrFail($id)));
@@ -81,6 +72,8 @@ class AdminBookController
 
     public function publish(string $id): void
     {
+        AuthMiddleware::requireRole(['admin']);
+        self::requireSellable(['published' => 1] + $this->findOrFail($id));
         $this->setStatus($id, ['published' => 1]);
     }
 
@@ -202,6 +195,76 @@ class AdminBookController
                 ->execute(['book_id' => $id, 'page_number' => $page]);
         }
         echo json_encode(['deleted' => true]);
+    }
+
+    private const MAX_PRICE_PAISE = 10_000_000; // Rs 1,00,000 per book: far above any real price, catches typos
+
+    /**
+     * Validates the editable fields present in $data (create has already required title and both prices) and
+     * returns column => normalised value. Title/category: Unicode-trimmed, no control characters, title 1-255
+     * chars, category <= 100 (empty = null). Description: up to 65535 bytes of UTF-8, line breaks and tabs
+     * allowed, no other control characters (blank = null). Prices: 0..100000 with <= 2 decimals (199, 199.5, "199.50").
+     */
+    private static function validateFields(array $data): array
+    {
+        $row = [];
+        $errors = [];
+        if (array_key_exists('title', $data)) {
+            $v = is_string($data['title']) ? AdminOrderController::clean($data['title']) : null;
+            if ($v === null || $v === '' || mb_strlen($v) > 255) {
+                $errors['title'] = 'Required, 1-255 characters, no control characters';
+            } else {
+                $row['title'] = $v;
+            }
+        }
+        if (array_key_exists('category', $data)) {
+            $v = $data['category'] === null ? '' : (is_string($data['category']) ? AdminOrderController::clean($data['category']) : null);
+            if ($v === null || mb_strlen($v) > 100) {
+                $errors['category'] = 'At most 100 characters, no control characters';
+            } else {
+                $row['category'] = $v === '' ? null : $v;
+            }
+        }
+        if (array_key_exists('description', $data)) {
+            $v = $data['description'];
+            if ($v !== null && (!is_string($v) || strlen($v) > 65535 || !mb_check_encoding($v, 'UTF-8')
+                || preg_match('/[^\P{Cc}\t\n\r]/u', $v))) {
+                $errors['description'] = 'Text up to 65535 bytes, no control characters other than line breaks and tabs';
+            } else {
+                $row['description'] = $v === null || trim($v) === '' ? null : $v;
+            }
+        }
+        foreach (['onlinePrice' => 'online_price', 'hardcopyPrice' => 'hardcopy_price'] as $key => $column) {
+            if (array_key_exists($key, $data)) {
+                $v = Money::parseAmount($data[$key], self::MAX_PRICE_PAISE);
+                if ($v === null) {
+                    $errors[$key] = 'A price from 0 to 100000 with at most 2 decimals';
+                } else {
+                    $row[$column] = $v;
+                }
+            }
+        }
+        if ($errors) {
+            throw new ApiException('Validation failed', 400, 'validation_error', $errors);
+        }
+        return $row;
+    }
+
+    /** A published book needs both prices >= 1: checkout cannot charge 0 (Razorpay's minimum is Rs 1). */
+    private static function requireSellable(array $book): void
+    {
+        if (!(int) $book['published']) {
+            return;
+        }
+        $errors = [];
+        foreach (['online_price' => 'onlinePrice', 'hardcopy_price' => 'hardcopyPrice'] as $column => $key) {
+            if (Money::toPaise((string) $book[$column]) < 100) {
+                $errors[$key] = 'A published book needs a price of at least 1';
+            }
+        }
+        if ($errors) {
+            throw new ApiException('Validation failed', 400, 'validation_error', $errors);
+        }
     }
 
     private function validatePageNumber(string $pageNumber): int
