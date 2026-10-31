@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
 import { captureReferralFromUrl } from './utils/referral'
 import { SessionProvider } from './context/SessionContext'
 import { useScrollReveal } from './hooks/useScrollReveal'
@@ -22,6 +22,8 @@ import AdminReferralsPage from './pages/admin/AdminReferralsPage'
 import AdminCommissionsPage from './pages/admin/AdminCommissionsPage'
 import AdminRefundsPage from './pages/admin/AdminRefundsPage'
 import AdminSettingsPage from './pages/admin/AdminSettingsPage'
+import Header from './components/home/Header'
+import Footer from './components/home/Footer'
 
 function ScrollReveal() {
   useScrollReveal()
@@ -33,6 +35,12 @@ function ReferralCapture() {
     captureReferralFromUrl()
   }, [])
   return null
+}
+
+// Unknown paths: the host serves index.html for every route (public/.htaccess, public/_redirects),
+// so "not found" is decided here, client-side, with HTTP 200.
+function NotFound() {
+  return <><Header /><div className="container" style={{ paddingTop: '2rem', paddingBottom: '2rem' }}><h2>Page not found</h2><p><Link to="/">Go to the home page</Link></p></div><Footer /></>
 }
 
 function App() {
@@ -63,6 +71,7 @@ function App() {
             <Route path="commissions" element={<AdminCommissionsPage />} />
             <Route path="settings" element={<AdminSettingsPage />} />
           </Route>
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
     </SessionProvider>

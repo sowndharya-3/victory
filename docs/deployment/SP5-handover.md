@@ -161,12 +161,13 @@ over `src`). No SMTP variables: email is deferred.
 ## 7. Frontend build and upload
 
 ```bash
-VITE_API_URL=https://<live-api-url> npm ci && npm run build
+npm ci && VITE_API_URL=https://<live-api-url> npm run build
 ```
 
-Upload the contents of `dist/` to the site's web root. Configure an SPA fallback so deep links (`/admin`,
-`/my-books`, `/read/2`, `/track`) serve `index.html` (nginx `try_files $uri /index.html;`, or an `.htaccess`
-rewrite on Apache/Hostinger). `FRONTEND_ORIGIN` on the API must equal this site's origin exactly.
+Upload the contents of `dist/` (including `.htaccess`) to the site's web root. The SPA fallback for deep links
+(`/admin`, `/my-books`, `/read/2`, `/track`) ships in the build for Apache (`.htaccess`) and Netlify/Cloudflare
+(`_redirects`); nginx and the rest: see [frontend-hosting.md](frontend-hosting.md). `FRONTEND_ORIGIN` on the API
+must equal this site's origin exactly.
 
 ## 8. Loading the two books through the live Admin Panel
 
