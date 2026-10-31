@@ -1033,9 +1033,12 @@ held() { # $1 SQL run inside a transaction held open 3 s in the background (unco
 }
 sql "DELETE FROM rate_limits WHERE bucket LIKE 'referral-apply:%';"
 for i in 1 2 3; do curl -s -o /dev/null -w '%{http_code}\n' -X POST "$BASE_URL/api/referral/applications" -H "Content-Type: application/json" -d "$(app_json "$RG-race@example.com")" >"$TMP/race$i" & done; wait
-RACE=$(cat "$TMP/race1" "$TMP/race2" "$TMP/race3" | sort | tr '\n' ' ')
+RACE=$(cat "$TMP/race1" "$TMP/race2" "$TMP/race3" | tr -d '\r' | sort | tr '\n' ' ') # Windows curl writes CRLF
 app_post "$(app_json "$RG-RACE@Example.COM")"
-check "3 simultaneous applications, same gmail -> one 201, two 409; case/space variant 409; one row" "$([ "$RACE" = "201 409 409 " ] && [ "$ACODE" = "409" ] && jh "$A" '"code":"duplicate_application"' && [ "$(sql "SELECT COUNT(*) FROM referral_applications WHERE gmail='$RG-race@example.com'")" = "1" ] && echo true || echo false)"
+RN=$(sql "SELECT COUNT(*) FROM referral_applications WHERE gmail='$RG-race@example.com'")
+RC=$(jget "$A" code)
+check "3 simultaneous applications, same gmail -> one 201, two 409; case variant 409 duplicate_application; one row (got [$RACE] $ACODE $RC rows=$RN)" "$([ "$RACE" = "201 409 409 " ] && [ "$ACODE" = "409" ] && [ "$RC" = "duplicate_application" ] && [ "$RN" = "1" ] && echo true || echo false)"
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'referral-apply:%';" # 5/hour per IP: this block posts 6
 held "INSERT INTO referral_applications (name, status, phone, whatsapp, gmail) VALUES ('Held','Faculty','9876543210','9876543210','$RG-held@example.com')"
 app_post "$(app_json "$RG-HELD@example.com")"; wait $HELD
 check "application racing an uncommitted one (DB unique key, not the pre-check) -> 409 duplicate_application, one row" "$([ "$ACODE" = "409" ] && jh "$A" '"code":"duplicate_application"' && [ "$(sql "SELECT COUNT(*) FROM referral_applications WHERE gmail='$RG-held@example.com'")" = "1" ] && echo true || echo false)"
