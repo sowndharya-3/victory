@@ -264,3 +264,28 @@ commission, referral mapping, the test referral application and partner, their a
 and the throwaway admin (only `admin` remains). Books 1 and 2 unchanged (`/api/books` md5 identical). Dev server and browser stopped.
 
 > Note: the seven reader screenshots that show pages of the owner's real books (`reader-1280/820/390.jpg`, `reader-page1-1280.jpg`, `reader-page3-1280.jpg`, `reader-tamil-book-page1.jpg`, `reader-watermark-full-page.jpg`) are kept locally in `docs/deployment/screenshots-private/` and are deliberately not committed, to avoid publishing paid book content.
+
+## Pre-merge hardening (reader limits, image, partner email, production safety)
+
+Run date: 2026-10-31, branch `sp5-orders-codes` at 9729042, image `php:8.2-fpm-trixie` (PHP 8.2.35, Debian 13.7,
+poppler-utils 25.03), `mysql:8.0` (8.0.46, volume untouched, migration 008 applied in place),
+`APP_ENV=development`, `RAZORPAY_GATEWAY=fake`. One full pass, zero failures:
+
+| Suite | Result |
+|---|---|
+| order_test.sh | 290 passed, 0 failed (was 277: +3 reader hardening in section 8, +5 migration-008 races in section 10, +5 login throttling in new section 11) |
+| admin_authz 99, refund 69, codes 60, reader 55 (was 33), signature_gateway 54 (was 27), commission 53 (was 48), order_fulfillment 27, reconciler 25, money_pricing 14, address_validator 14, jwt 6, middleware 5, upload_validator 3, race 1 | all passed, 0 failed |
+| book_test.sh / http_test.sh | 25/25, 23/23 |
+
+New coverage: renderer timeout (fake slow binary SIGKILLed + reaped), busy lock -> 503 `render_busy`, negative cache,
+14400 pt and 4900 pt (pixel cap) MediaBox fixtures generated in the test, Title "Pages: 9999" injection, zero-page PDF,
+digit validation (`01`, `12\n`), owner of a book without PDF -> 200 without pageCount, atomic re-upload + invalidate
+leftovers, vanished cached page -> 503; DB unique keys for partner gmail / open applications (3 simultaneous
+applications -> one 201, two 409; uncommitted-row races for application, approve and partner edit -> 409; rejected
+email re-applies); APP_ENV allow-list x gateway x secrets matrix (fake refused for unset/staging/Production/" production"
+etc., weak/placeholder secrets refused outside dev, values never in messages); login throttling (customer 10/account,
+admin 5/account, per-IP buckets, unknown accounts identical, buckets separate, successes not counted).
+
+Leftovers removed (book_test books 225/238/253 with their storage/upload dirs, 6 book_test/http_test users); older
+archived SP-4 leftovers kept. `/api/books`, `/api/books/1`, `/api/books/2` and both private PDFs md5-identical to the
+start of the session; settings unchanged.
