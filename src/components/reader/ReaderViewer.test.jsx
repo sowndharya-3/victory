@@ -79,7 +79,7 @@ test('403 shows Access revoked, 429 a slow-down message', async () => {
 test('watermark, notice and index panel', async () => {
   render(<ReaderViewer {...props} />)
   await pageImg(1)
-  expect(screen.getAllByText('Licensed to buyer@example.com · 7').length).toBeGreaterThan(1)
+  expect(screen.getAllByText('Licensed to buyer@example.com · 7').length).toBeGreaterThanOrEqual(200)
   expect(screen.getByText(/screenshots and screen recording cannot be fully prevented/i)).toBeInTheDocument()
   expect(screen.queryByTitle('Book index')).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: /show index/i }))

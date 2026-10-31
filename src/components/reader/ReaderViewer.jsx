@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { fetchPageBlobUrl } from '../../api/reader'
 
 const SWIPE_MIN_PX = 50
-const WATERMARK_REPEAT = 24
+// ponytail: the rotated box is 2x the page each way; ~200 short spans keep diagonal rows ~150px apart on a full page.
+const WATERMARK_REPEAT = 200
 
 function errorMessage(err) {
   if (err.status === 403) return 'Access revoked. This book is no longer available on your account.'
