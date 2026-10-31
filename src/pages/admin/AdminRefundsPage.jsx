@@ -8,6 +8,7 @@ function RefundRow({ r, onDone }) {
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [confirming, setConfirming] = useState(false)
   const canApprove = ['requested', 'approved', 'failed'].includes(r.status)
   const canReject = ['requested', 'approved', 'failed'].includes(r.status)
 
@@ -17,11 +18,13 @@ function RefundRow({ r, onDone }) {
     try {
       await fn()
       setNote('')
-      onDone()
     } catch (err) {
       setError(err.fields?.note || adminErrorMessage(err))
     } finally {
       setBusy(false)
+      setConfirming(false)
+      // Refetch even on failure: a gateway error leaves the refund `failed` server-side.
+      onDone()
     }
   }
 
@@ -39,7 +42,15 @@ function RefundRow({ r, onDone }) {
           <>
             <label htmlFor={`refund-note-${r.id}`}>Note</label>
             <input id={`refund-note-${r.id}`} className="form-control" maxLength={500} value={note} onChange={e => setNote(e.target.value)} />
-            {canApprove && <button type="button" disabled={busy} onClick={() => act(() => approveRefund(r.id, note.trim()))}>Approve</button>}
+            {canApprove && !confirming && <button type="button" disabled={busy} onClick={() => setConfirming(true)}>Approve</button>}
+            {canApprove && confirming && (
+              <>
+                <button type="button" disabled={busy} onClick={() => act(() => approveRefund(r.id, note.trim()))}>
+                  Confirm refund {formatRupees(r.amount)}
+                </button>
+                <button type="button" disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
+              </>
+            )}
             {canReject && (
               <button type="button" disabled={busy} onClick={() => {
                 if (!note.trim()) return setError('A note is required to reject.')

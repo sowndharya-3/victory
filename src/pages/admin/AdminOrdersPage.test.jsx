@@ -78,3 +78,27 @@ test('refund_required from the server shows a clear message', async () => {
   fireEvent.click(screen.getByRole('button', { name: /update status/i }))
   expect(await screen.findByText(/refund it instead/i)).toBeInTheDocument()
 })
+
+test('a pasted full access code is not sent as a search query', async () => {
+  const spy = vi.spyOn(adminApi, 'fetchAdminOrders').mockResolvedValue(list([]))
+  render(<AdminOrdersPage />)
+  await screen.findByText(/no orders/i)
+  fireEvent.change(screen.getByLabelText(/search/i), { target: { value: 'ABCD-EFGH-JKMN-PQRS' } })
+  fireEvent.click(screen.getByRole('button', { name: /^search$/i }))
+  expect(screen.getByText(/use the code panel/i)).toBeInTheDocument()
+  expect(spy).toHaveBeenCalledTimes(1)
+})
+
+test('a stale slower response does not overwrite a newer one', async () => {
+  let resolveFirst
+  vi.spyOn(adminApi, 'fetchAdminOrders')
+    .mockReturnValueOnce(new Promise(r => { resolveFirst = r }))
+    .mockResolvedValueOnce(list([row({ id: 2, orderNumber: 'VT-NEW' })]))
+  render(<AdminOrdersPage />)
+  fireEvent.change(screen.getByLabelText(/^type$/i), { target: { value: 'hardcopy' } })
+  expect(await screen.findByText('VT-NEW')).toBeInTheDocument()
+  resolveFirst(list([row({ id: 1, orderNumber: 'VT-OLD' })]))
+  await new Promise(r => setTimeout(r, 20))
+  expect(screen.queryByText('VT-OLD')).not.toBeInTheDocument()
+  expect(screen.getByText('VT-NEW')).toBeInTheDocument()
+})

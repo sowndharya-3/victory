@@ -38,6 +38,7 @@ function AdminCodesPanel({ order, onChanged }) {
   const [verified, setVerified] = useState(null)
   const [verifyError, setVerifyError] = useState('')
   const [issued, setIssued] = useState(null)
+  const [verifying, setVerifying] = useState(false)
 
   const verify = async (e) => {
     e.preventDefault()
@@ -46,10 +47,13 @@ function AdminCodesPanel({ order, onChanged }) {
     setVerified(null)
     setVerifyError('')
     if (!code) return
+    setVerifying(true)
     try {
       setVerified(await verifyCode(code))
     } catch (err) {
       setVerifyError(err.code === 'not_found' ? 'Unknown code.' : adminErrorMessage(err))
+    } finally {
+      setVerifying(false)
     }
   }
 
@@ -63,7 +67,7 @@ function AdminCodesPanel({ order, onChanged }) {
         <label htmlFor="verify-code">Code to verify</label>
         <input id="verify-code" className="form-control" autoComplete="off" spellCheck={false}
           value={pasted} onChange={e => setPasted(e.target.value)} />
-        <button type="submit" className="btn btn-outline">Verify</button>
+        <button type="submit" className="btn btn-outline" disabled={verifying}>Verify</button>
       </form>
       {verifyError && <p role="alert" className="form-error">{verifyError}</p>}
       {verified && (

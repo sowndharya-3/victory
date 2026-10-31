@@ -59,7 +59,7 @@ function ReferralRegisterPage() {
                 <label htmlFor={field}>{label}</label>
                 <input id={field} type={type} className="form-control" value={form[field]} onChange={update(field)} required={required}
                   aria-invalid={fields[field] ? true : undefined} aria-describedby={fields[field] ? `${field}-error` : undefined} />
-                {fields[field] && <p id={`${field}-error`} className="form-error referral-field-error">{fields[field]}</p>}
+                {fields[field] && <p id={`${field}-error`} className="form-error">{fields[field]}</p>}
               </div>
             ))}
             <label htmlFor="status">Status</label>
@@ -69,8 +69,8 @@ function ReferralRegisterPage() {
               <option>Faculty</option>
               <option>Institution</option>
             </select>
-            {fields.status && <p className="form-error referral-field-error">{fields.status}</p>}
-            {error && <p role="alert" className="form-error referral-field-error">{error}</p>}
+            {fields.status && <p className="form-error">{fields.status}</p>}
+            {error && <p role="alert" className="form-error">{error}</p>}
             <button type="submit" className="btn btn-primary" disabled={busy}>Register</button>
           </form>
         )}

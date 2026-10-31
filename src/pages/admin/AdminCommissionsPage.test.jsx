@@ -15,7 +15,11 @@ function setup(rows) {
   vi.spyOn(adminApi, 'fetchCommissionSettings').mockResolvedValue({ digital: '25.00', hardcopy: '30.00' })
   vi.spyOn(adminApi, 'fetchCommissions').mockResolvedValue({
     items: rows, page: 1, perPage: 25, total: rows.length,
-    totals: { pending: '0.00', payable: '25.00', paid: '0.00', reversed: '0.00', clawbackDue: { count: 0, amount: '0.00' } },
+    // shape from backend AdminCommissionController::list
+    totals: {
+      pending: { count: 0, amount: '0.00' }, payable: { count: 1, amount: '25.00' }, paid: { count: 2, amount: '60.00' },
+      reversed: { count: 0, amount: '0.00' }, clawbackDue: { count: 0, amount: '0.00' },
+    },
   })
   render(<AdminCommissionsPage />)
 }
@@ -26,6 +30,8 @@ test('renders commission rows and rates from the API', async () => {
   expect(screen.getByText('Ravi')).toBeInTheDocument()
   expect(await screen.findByDisplayValue('30.00')).toBeInTheDocument()
   expect(screen.getByText(/refund open/i)).toBeInTheDocument()
+  expect(screen.getByText('₹60.00')).toBeInTheDocument()
+  expect(screen.getByText(/paid \(2\)/i)).toBeInTheDocument()
 })
 
 test('mark paid requires a payout reference', async () => {

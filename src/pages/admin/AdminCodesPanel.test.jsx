@@ -44,3 +44,14 @@ test('verify sends the pasted code, shows the result and clears the input', asyn
   expect(await screen.findByText(/not redeemed/i)).toBeInTheDocument()
   expect(input.value).toBe('')
 })
+
+test('verify is disabled while the request is pending', async () => {
+  let resolve
+  vi.spyOn(adminApi, 'verifyCode').mockReturnValue(new Promise(r => { resolve = r }))
+  render(<AdminCodesPanel order={order} onChanged={() => {}} />)
+  fireEvent.change(screen.getByLabelText(/code to verify/i), { target: { value: 'ABCD-EFGH-JKMN-PQRS' } })
+  fireEvent.click(screen.getByRole('button', { name: /verify/i }))
+  expect(screen.getByRole('button', { name: /verify/i })).toBeDisabled()
+  resolve({ status: 'active', bookTitle: 'B', orderNumber: 'VT-0009', orderStatus: 'paid', redeemed: false })
+  await waitFor(() => expect(screen.getByRole('button', { name: /verify/i })).not.toBeDisabled())
+})

@@ -42,7 +42,22 @@ test('refunds queue renders rows; reject needs a note', async () => {
   expect(within(tr).getByText(/note is required/i)).toBeInTheDocument()
   expect(reject).not.toHaveBeenCalled()
   fireEvent.click(within(tr).getByRole('button', { name: /approve/i }))
+  expect(approve).not.toHaveBeenCalled()
+  fireEvent.click(within(tr).getByRole('button', { name: /confirm refund ₹199.00/i }))
   await waitFor(() => expect(approve).toHaveBeenCalledWith(8, ''))
+})
+
+test('refunds list is refetched after a failed approve (backend marks it failed)', async () => {
+  const fetch = vi.spyOn(adminApi, 'fetchRefunds').mockResolvedValue({
+    items: [{ id: 8, orderId: 7, orderNumber: 'VT-0007', purchaseType: 'digital', status: 'requested', reason: 'x', adminNote: null, amount: 199, createdAt: '2026-10-29' }],
+    page: 1, perPage: 1, total: 1,
+  })
+  vi.spyOn(adminApi, 'approveRefund').mockRejectedValue(Object.assign(new Error('x'), { status: 502, code: 'gateway_error' }))
+  render(<AdminRefundsPage />)
+  const tr = (await screen.findByText('VT-0007')).closest('tr')
+  fireEvent.click(within(tr).getByRole('button', { name: /approve/i }))
+  fireEvent.click(within(tr).getByRole('button', { name: /confirm refund/i }))
+  await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
 })
 
 test('settings saves strings and shows server validation errors', async () => {

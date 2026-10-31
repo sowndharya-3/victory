@@ -1,21 +1,26 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { adminErrorMessage } from '../../api/admin'
 
-// Loads data with loading/error state; `reload()` refreshes without blanking the page.
+// Loads data with loading/error state; `reload()` keeps the old data on screen while it refreshes.
+// Only the latest request may update state, so a slow earlier response never overwrites a newer one.
 export function useLoad(loader, deps) {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const latest = useRef(0)
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const reload = useCallback(async () => {
+    const id = ++latest.current
+    setLoading(true)
     setError('')
     try {
-      setData(await loader())
+      const result = await loader()
+      if (id === latest.current) setData(result)
     } catch (err) {
-      setError(adminErrorMessage(err))
+      if (id === latest.current) setError(adminErrorMessage(err))
     } finally {
-      setLoading(false)
+      if (id === latest.current) setLoading(false)
     }
   }, deps)
 

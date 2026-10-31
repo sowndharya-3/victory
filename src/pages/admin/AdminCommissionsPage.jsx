@@ -115,10 +115,9 @@ function AdminCommissionsPage() {
       <RatesForm />
       {t && (
         <ul className="admin-cards">
-          <li><span>Pending</span><strong>{formatRupees(t.pending)}</strong></li>
-          <li><span>Payable</span><strong>{formatRupees(t.payable)}</strong></li>
-          <li><span>Paid</span><strong>{formatRupees(t.paid)}</strong></li>
-          <li><span>Reversed</span><strong>{formatRupees(t.reversed)}</strong></li>
+          {STATUSES.map(k => (
+            <li key={k}><span>{k[0].toUpperCase() + k.slice(1)} ({t[k]?.count ?? 0})</span><strong>{formatRupees(t[k]?.amount)}</strong></li>
+          ))}
           {t.clawbackDue?.count > 0 && <li><span>Clawback due ({t.clawbackDue.count})</span><strong>{formatRupees(t.clawbackDue.amount)}</strong></li>}
         </ul>
       )}

@@ -6,8 +6,12 @@ import AdminOrderDetail from './AdminOrderDetail'
 const STATUSES = ['pending', 'paid', 'failed', 'cancelled', 'refunded']
 const FULFILMENT = ['confirmed', 'processing', 'shipped', 'out_for_delivery', 'delivered', 'cancelled', 'not_applicable']
 
+// A full access code would end up in the GET query string (and server logs): send admins to Verify instead.
+const looksLikeFullCode = (v) => /^[A-Z0-9]{4,}(-[A-Z0-9]{4,}){2,}$/i.test(v) || /^[A-Z0-9]{16,}$/i.test(v)
+
 function AdminOrdersPage() {
   const [search, setSearch] = useState('')
+  const [searchHint, setSearchHint] = useState('')
   const [filters, setFilters] = useState({ q: '', type: '', status: '', fulfilment: '', page: 1 })
   const [selectedId, setSelectedId] = useState(null)
   const { data, error, loading, reload } = useLoad(() => fetchAdminOrders(filters), [filters])
@@ -19,9 +23,18 @@ function AdminOrdersPage() {
   return (
     <div>
       <h2>Orders</h2>
-      <form className="admin-filters" onSubmit={e => { e.preventDefault(); setFilters(f => ({ ...f, q: search.trim(), page: 1 })) }}>
+      <form className="admin-filters" onSubmit={e => {
+        e.preventDefault()
+        const q = search.trim()
+        if (looksLikeFullCode(q)) {
+          setSearchHint('That looks like a full access code. Open the order and use the code panel to verify it; search by the last 4 characters instead.')
+          return
+        }
+        setSearchHint('')
+        setFilters(f => ({ ...f, q, page: 1 }))
+      }}>
         <label htmlFor="order-search">Search</label>
-        <input id="order-search" className="form-control" placeholder="Order no., name, email, phone, tracking code, code last 4"
+        <input id="order-search" className="form-control" placeholder="Order no., name, email, phone, tracking code or code last 4"
           value={search} onChange={e => setSearch(e.target.value)} maxLength={100} autoComplete="off" />
         <button type="submit" className="btn btn-primary">Search</button>
         <label htmlFor="type-filter">Type</label>
@@ -41,6 +54,7 @@ function AdminOrdersPage() {
           {FULFILMENT.map(s => <option key={s} value={s}>{label(s)}</option>)}
         </select>
       </form>
+      {searchHint && <p role="alert" className="form-error">{searchHint}</p>}
 
       <LoadState loading={loading} error={error} empty={!items.length} emptyText="No orders match." />
       {items.length > 0 && (

@@ -9,3 +9,11 @@ Status: DONE (frontend only; no Docker/DB used, not browser-tested against the l
 - SessionContext is auth-only (old persisted mock keys dropped on load); deleted `data/books.js`, `data/books.test.js`, `data/referralPartners.js`; BookDetailPage no longer reads mock books/orders (its mock "Read Book" link is gone; My Books covers reading). Guard test fails if any component reads `state.orders|books|referralPartners|commissionRate`.
 - Tests: baseline 139 -> 137 (obsolete mock reducer/page tests removed, 27 new). RED seen first for all new admin/referral tests. `npm run build` OK. `grep CREATE_ORDER|seedBooks|seedReferralPartners src` empty.
 - Concerns/minors: `.form-error` is `display:none` globally in site.css (only shown in admin + referral form via scoped rule; checkout/account error text is still invisible site-wide -> fix in Task 15 CSS pass); partner edit (PUT /api/admin/partners/{id}) and audit-log browser page not built (audit shown per order); refunds list unpaginated (backend newest 200); not verified in a real browser.
+
+## Fix round 1 (review of c49bb36)
+- Commission totals use the real `{count, amount}` shape (test mock now matches AdminCommissionController::list); cards show count + amount.
+- site.css: `.form-error`/`.form-success` no longer `display:none` globally (light red/green boxes, hidden only when `:empty`); admin-scoped override removed. Errors now visible on checkout, account, track, reader, admin login etc.
+- useLoad ignores stale/out-of-order responses (request counter) and sets loading on reload.
+- Refunds: Approve is two-step ("Confirm refund ₹X" / Cancel); list refetched after approve even on failure (gateway_error leaves it `failed`).
+- Codes panel: Verify disabled while pending. Orders search refuses a full-looking access code (not put in the query string) and points to the code panel.
+- Tests 137 -> 141 (RED first for all 6 new/changed cases); full suite + build green.

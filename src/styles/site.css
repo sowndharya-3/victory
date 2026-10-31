@@ -1198,26 +1198,31 @@
             color: var(--accent);
         }
         
-        .form-success {
-            background-color: #4CAF50;
-            color: white;
-            padding: 15px;
-            border-radius: var(--border-radius);
-            margin-bottom: 20px;
-            text-align: center;
-            display: none;
-        }
-        
+        .form-success,
         .form-error {
-            background-color: #f44336;
-            color: white;
-            padding: 15px;
+            padding: 8px 12px;
             border-radius: var(--border-radius);
-            margin-bottom: 20px;
-            text-align: center;
+            margin: 6px 0 12px;
+        }
+
+        .form-success {
+            background-color: #e8f5e9;
+            color: #1b5e20;
+            border-left: 4px solid #4CAF50;
+        }
+
+        .form-error {
+            background-color: #fdecea;
+            color: #b71c1c;
+            border-left: 4px solid #f44336;
+        }
+
+        /* Some pages always render an (empty) message box; hide it until it has text. */
+        .form-success:empty,
+        .form-error:empty {
             display: none;
         }
-        
+
         @media (max-width: 1100px) {
             .logo-text h1 {
                 font-size: 1.3rem;
@@ -1800,8 +1805,7 @@
         }
         @media print { .reader { display: none !important; } }
 
-/* Admin panel (SP-5 Task 21). site.css hides .form-error by default (contact form toggles it); show it in admin. */
-.admin-layout .form-error, .referral-field-error { display: block; padding: 8px 12px; margin: 6px 0; text-align: left; }
+/* Admin panel (SP-5 Task 21). */
 .admin-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 12px 0; max-width: 100%; }
 .admin-table-wrap table { border-collapse: collapse; min-width: 100%; }
 .admin-table-wrap th, .admin-table-wrap td { padding: 6px 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: top; white-space: nowrap; }
