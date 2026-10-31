@@ -41,3 +41,12 @@ test('publishBook posts to the publish endpoint', async () => {
   expect(url).toContain('/api/admin/books/3/publish')
   expect(options.method).toBe('POST')
 })
+
+test('cover and index upload paths are resolved against the API host', async () => {
+  mockFetch({ id: 2, title: 'B', coverUrl: '/uploads/books/2/cover.jpg', indexUrl: '/uploads/books/2/index.pdf' })
+  const book = await fetchBook(2)
+  expect(book.coverUrl).toBe('http://localhost:8080/uploads/books/2/cover.jpg')
+  expect(book.indexUrl).toBe('http://localhost:8080/uploads/books/2/index.pdf')
+  mockFetch([{ id: 3, title: 'C', coverUrl: null }])
+  expect((await fetchBooks())[0].coverUrl).toBeNull()
+})

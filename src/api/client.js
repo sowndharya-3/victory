@@ -1,5 +1,10 @@
 export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080'
 
+// The API returns upload paths like "/uploads/books/2/cover.jpg"; they live on the API host, not the frontend's.
+export function assetUrl(path) {
+  return typeof path === 'string' && path.startsWith('/') ? `${API_BASE_URL}${path}` : path
+}
+
 export async function apiRequest(path, { method = 'GET', body, token } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (token) headers.Authorization = `Bearer ${token}`

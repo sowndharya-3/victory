@@ -1,4 +1,4 @@
-import { apiRequest } from './client'
+import { apiRequest, assetUrl } from './client'
 
 // Response shapes (see backend/src/Controllers/*):
 //   fetchQuote       -> { bookId, purchaseType, currency, subtotal, shipping, gst, gstPercent, gstMode, total }  (rupees)
@@ -48,8 +48,10 @@ export function fetchMyOrder(token, orderId) {
   return apiRequest(`/api/me/orders/${orderId}`, { token })
 }
 
-export function fetchLibrary(token) {
-  return apiRequest('/api/me/library', { token })
+export async function fetchLibrary(token) {
+  const lib = await apiRequest('/api/me/library', { token })
+  const fix = (b) => ({ ...b, coverUrl: assetUrl(b.coverUrl) })
+  return { ...lib, books: (lib.books || []).map(fix), pendingRedemptions: (lib.pendingRedemptions || []).map(fix) }
 }
 
 export function redeemCode(token, code) {

@@ -1,11 +1,17 @@
-import { apiRequest, apiRequestFile } from './client'
+import { apiRequest, apiRequestFile, assetUrl } from './client'
 
-export function fetchBooks() {
-  return apiRequest('/api/books')
+const withAssets = (book) => ({
+  ...book,
+  coverUrl: assetUrl(book.coverUrl),
+  ...('indexUrl' in book && { indexUrl: assetUrl(book.indexUrl) }),
+})
+
+export async function fetchBooks() {
+  return (await apiRequest('/api/books')).map(withAssets)
 }
 
-export function fetchBook(id) {
-  return apiRequest(`/api/books/${id}`)
+export async function fetchBook(id) {
+  return withAssets(await apiRequest(`/api/books/${id}`))
 }
 
 export function fetchAdminBooks(token) {
