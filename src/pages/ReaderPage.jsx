@@ -30,6 +30,7 @@ function ReaderPage() {
 
   const notReady = <Shell><p>This book is not available to read yet. Please try again later.</p></Shell>
   if (!token || loadError?.status === 401) return <Shell><p><Link to="/account">Log in to read this book</Link></p></Shell>
+  if (loadError?.code === 'render_busy') return <Shell><p>This book is being prepared. Please refresh in a few seconds.</p></Shell>
   if (loadError?.status >= 500) return notReady // e.g. render_failed while counting pages
   if (loadError) return <Shell><p role="alert" className="form-error">{loadError.message}</p></Shell>
   if (!access) return <Shell><p aria-live="polite">Loading…</p></Shell>

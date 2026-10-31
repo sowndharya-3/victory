@@ -5,6 +5,12 @@ export function assetUrl(path) {
   return typeof path === 'string' && path.startsWith('/') ? `${API_BASE_URL}${path}` : path
 }
 
+// Retry-After in seconds (the API sends whole seconds); undefined when absent or not a number.
+export function retryAfterSeconds(res) {
+  const n = Number(res.headers?.get?.('Retry-After'))
+  return Number.isFinite(n) && n >= 0 && res.headers.get('Retry-After') !== '' ? n : undefined
+}
+
 export async function apiRequest(path, { method = 'GET', body, token } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (token) headers.Authorization = `Bearer ${token}`
@@ -19,7 +25,7 @@ export async function apiRequest(path, { method = 'GET', body, token } = {}) {
 
   if (!res.ok) {
     // `fields` carries per-field validation messages (e.g. "address.pincode").
-    throw Object.assign(new Error(data?.error?.message || 'Request failed'), { fields: data?.error?.fields, status: res.status, code: data?.error?.code })
+    throw Object.assign(new Error(data?.error?.message || 'Request failed'), { fields: data?.error?.fields, status: res.status, code: data?.error?.code, retryAfter: retryAfterSeconds(res) })
   }
 
   return data

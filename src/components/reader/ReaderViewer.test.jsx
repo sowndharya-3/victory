@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { vi, expect } from 'vitest'
 import ReaderViewer from './ReaderViewer'
 import { fetchPageBlobUrl } from '../../api/reader'
@@ -165,4 +165,88 @@ test('Retry refetches after a 429 but is not offered for 403', async () => {
   render(<ReaderViewer {...props} />)
   await screen.findByText(/access revoked/i)
   expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument()
+})
+
+describe('render_busy', () => {
+  const busy = (retryAfter) => Object.assign(new Error('busy'), { status: 503, code: 'render_busy', retryAfter })
+  const tick = (ms) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+  const calls = (n) => fetchPageBlobUrl.mock.calls.filter(c => c[2] === n).length
+
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  test('retries a busy page after Retry-After, shows Preparing meanwhile, then renders', async () => {
+    fetchPageBlobUrl.mockImplementation((t, b, p) => (p === 1 && calls(1) === 1 ? Promise.reject(busy(5)) : Promise.resolve(`blob:page-${p}`)))
+    render(<ReaderViewer {...props} />)
+    await tick(200)
+    expect(screen.getByText(/preparing this page/i)).toBeInTheDocument()
+    expect(calls(1)).toBe(1)
+    await tick(4000)
+    expect(calls(1)).toBe(1) // not before Retry-After
+    await tick(1100)
+    expect(calls(1)).toBe(2)
+    expect(screen.getByAltText('Page 1 of 12')).toHaveAttribute('src', 'blob:page-1')
+  })
+
+  test('gives up after 3 retries (4 requests), caps Retry-After at 10 s and shows Retry', async () => {
+    fetchPageBlobUrl.mockImplementation((t, b, p) => (p === 1 ? Promise.reject(busy(60)) : Promise.resolve(`blob:page-${p}`)))
+    render(<ReaderViewer {...props} />)
+    await tick(200)
+    await tick(9000)
+    expect(calls(1)).toBe(1)
+    await tick(1100)
+    expect(calls(1)).toBe(2)
+    await tick(10_100)
+    await tick(10_100)
+    expect(calls(1)).toBe(4)
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
+    await tick(60_000)
+    expect(calls(1)).toBe(4) // no more timers
+  })
+
+  test('a missing Retry-After waits 5 s, never less than 1 s', async () => {
+    fetchPageBlobUrl.mockImplementation((t, b, p) => (p === 1 && calls(1) < 3 ? Promise.reject(busy(calls(1) === 1 ? undefined : 0)) : Promise.resolve(`blob:page-${p}`)))
+    render(<ReaderViewer {...props} />)
+    await tick(200)
+    await tick(4900)
+    expect(calls(1)).toBe(1)
+    await tick(200)
+    expect(calls(1)).toBe(2)
+    await tick(700)
+    expect(calls(1)).toBe(2) // second wait is 1 s (0 clamped up), not 0
+    await tick(400)
+    expect(calls(1)).toBe(3)
+  })
+
+  test('unmount cancels a pending retry', async () => {
+    fetchPageBlobUrl.mockImplementation((t, b, p) => (p === 1 ? Promise.reject(busy(5)) : Promise.resolve(`blob:page-${p}`)))
+    const { unmount } = render(<ReaderViewer {...props} />)
+    await tick(200)
+    unmount()
+    await tick(30_000)
+    expect(calls(1)).toBe(1)
+  })
+
+  test('changing page cancels the pending retry of the page left behind', async () => {
+    fetchPageBlobUrl.mockImplementation((t, b, p) => (p === 1 ? Promise.reject(busy(5)) : Promise.resolve(`blob:page-${p}`)))
+    render(<ReaderViewer {...props} />)
+    await tick(200)
+    fireEvent.click(screen.getByRole('button', { name: /next page/i }))
+    fireEvent.click(screen.getByRole('button', { name: /next page/i }))
+    await tick(30_000)
+    expect(calls(1)).toBe(1)
+  })
+
+  test('Retry after giving up starts a fresh round', async () => {
+    let fail = true
+    fetchPageBlobUrl.mockImplementation((t, b, p) => (p === 1 && fail ? Promise.reject(busy(1)) : Promise.resolve(`blob:page-${p}`)))
+    render(<ReaderViewer {...props} />)
+    await tick(200)
+    await tick(5000)
+    expect(calls(1)).toBe(4)
+    fail = false
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    await tick(300)
+    expect(screen.getByAltText('Page 1 of 12')).toHaveAttribute('src', 'blob:page-1')
+  })
 })

@@ -4,6 +4,13 @@ import { fetchPageBlobUrl } from '../../api/reader'
 const SWIPE_MIN_PX = 50
 // ponytail: the rotated box is 2x the page each way; ~200 short spans keep diagonal rows ~150px apart on a full page.
 const WATERMARK_REPEAT = 200
+// A page another request is still rendering answers 503 render_busy + Retry-After: retry quietly, a bounded number of
+// times (1 request + 3 retries per page, per Retry press), then fall back to the Retry button.
+const BUSY_RETRIES = 3
+const BUSY_DEFAULT_S = 5
+const BUSY_MIN_S = 1 // never a tight loop, even if the server says 0
+const BUSY_MAX_S = 10
+const busyDelayMs = (retryAfter) => Math.min(BUSY_MAX_S, Math.max(BUSY_MIN_S, retryAfter ?? BUSY_DEFAULT_S)) * 1000
 
 function errorMessage(err) {
   if (err.status === 403) return 'Access revoked. This book is no longer available on your account.'
@@ -34,11 +41,12 @@ function ReaderViewer({ token, bookId, pageCount, book, email, orderNumber }) {
     for (const [p, entry] of entries.current) {
       if (!window_.has(p)) {
         entry.controller.abort()
+        clearTimeout(entry.timer)
         if (entry.url) URL.revokeObjectURL(entry.url)
         entries.current.delete(p)
       }
     }
-    const load = (p) => {
+    const load = (p, attempt = 0) => {
       if (entries.current.has(p)) return
       const entry = { controller: new AbortController() }
       entries.current.set(p, entry)
@@ -50,13 +58,26 @@ function ReaderViewer({ token, bookId, pageCount, book, email, orderNumber }) {
         })
         .catch(err => {
           if (entries.current.get(p) !== entry) return
+          if (err.status === 503 && err.code === 'render_busy' && attempt < BUSY_RETRIES) {
+            // Keep the entry (so nothing else refetches this page) until the timer fires; leaving the window
+            // or unmounting aborts the entry and clears the timer.
+            entry.waiting = true
+            entry.timer = setTimeout(() => {
+              if (entries.current.get(p) !== entry) return
+              entries.current.delete(p)
+              load(p, attempt + 1)
+              rerender(n => n + 1)
+            }, busyDelayMs(err.retryAfter))
+            rerender(n => n + 1)
+            return
+          }
           entries.current.delete(p) // so arriving at / retrying this page fetches again
           if (p === pageRef.current) setError(err)
         })
     }
     // ponytail: 150 ms debounce so a held arrow key doesn't fetch every skipped page;
     // pages already in the map render immediately regardless.
-    const timer = setTimeout(() => window_.forEach(load), 150)
+    const timer = setTimeout(() => window_.forEach(p => load(p)), 150)
     return () => clearTimeout(timer)
   }, [token, bookId, page, pageCount, retries])
 
@@ -65,6 +86,7 @@ function ReaderViewer({ token, bookId, pageCount, book, email, orderNumber }) {
     return () => {
       for (const entry of map.values()) {
         entry.controller.abort()
+        clearTimeout(entry.timer)
         if (entry.url) URL.revokeObjectURL(entry.url)
       }
       map.clear()
@@ -110,6 +132,7 @@ function ReaderViewer({ token, bookId, pageCount, book, email, orderNumber }) {
   const indexUrl = book?.indexUrl
   const indexIsPdf = indexUrl && /\.pdf($|\?)/i.test(indexUrl)
   const src = entries.current.get(page)?.url
+  const preparing = entries.current.get(page)?.waiting
 
   return (
     <div className="reader" onContextMenu={block} onDragStart={block}>
@@ -139,7 +162,7 @@ function ReaderViewer({ token, bookId, pageCount, book, email, orderNumber }) {
           ) : src ? (
             <img src={src} alt={label} draggable="false" />
           ) : (
-            <p aria-live="polite">Loading page…</p>
+            <p aria-live="polite">{preparing ? 'Preparing this page…' : 'Loading page…'}</p>
           )}
           <div className="reader-watermark" aria-hidden="true">
             {Array.from({ length: WATERMARK_REPEAT }, (_, i) => <span key={i}>{mark}</span>)}

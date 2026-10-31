@@ -66,6 +66,12 @@ test('owned without a page count is not available yet', async () => {
   expect(await screen.findByText(/not available to read yet/i)).toBeInTheDocument()
 })
 
+test('access render_busy (503) says the book is being prepared', async () => {
+  fetchAccess.mockRejectedValueOnce(Object.assign(new Error('busy'), { status: 503, code: 'render_busy', retryAfter: 5 }))
+  renderPage()
+  expect(await screen.findByText(/being prepared/i)).toBeInTheDocument()
+})
+
 test('access errors: 500 not available, 401 login link, other shows the message', async () => {
   fetchAccess.mockRejectedValueOnce(Object.assign(new Error('render failed'), { status: 500 }))
   const first = renderPage()
