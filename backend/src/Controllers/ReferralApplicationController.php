@@ -42,15 +42,20 @@ class ReferralApplicationController
         RateLimiter::hit('referral-apply:' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'), 5, 3600);
 
         $db = Db::connection();
-        // ponytail: check-then-insert without a unique key; two simultaneous identical submissions can both land, admin rejects one.
-        $dup = $db->prepare("SELECT 1 FROM referral_applications WHERE gmail = ? AND application_status IN ('pending', 'approved') LIMIT 1");
+        // Fast path; uq_open_application (migration 008) is the real guard against simultaneous submissions.
+        $dup = $db->prepare('SELECT 1 FROM referral_applications WHERE open_gmail = ? LIMIT 1');
         $dup->execute([$row['gmail']]);
+        $duplicate = new ApiException('An application with this Gmail is already pending or approved', 409, 'duplicate_application');
         if ($dup->fetchColumn()) {
-            throw new ApiException('An application with this Gmail is already pending or approved', 409, 'duplicate_application');
+            throw $duplicate;
         }
         $cols = array_keys($row);
-        $db->prepare('INSERT INTO referral_applications (' . implode(', ', $cols) . ') VALUES (' . implode(', ', array_fill(0, count($cols), '?')) . ')')
-            ->execute(array_values($row));
+        try {
+            $db->prepare('INSERT INTO referral_applications (' . implode(', ', $cols) . ') VALUES (' . implode(', ', array_fill(0, count($cols), '?')) . ')')
+                ->execute(array_values($row));
+        } catch (\PDOException $e) {
+            throw Db::isDuplicateKey($e, 'uq_open_application') ? $duplicate : $e;
+        }
         http_response_code(201);
         echo json_encode(['id' => (int) $db->lastInsertId(), 'applicationStatus' => 'pending']);
     }

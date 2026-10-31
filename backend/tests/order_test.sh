@@ -66,7 +66,7 @@ cleanup() {
        DELETE FROM rate_limits WHERE bucket LIKE 'reader-page:%' AND SUBSTRING_INDEX(bucket,':',-1) IN ($TU);"
   sql "DELETE FROM rate_limits WHERE bucket LIKE 'order-create:%' AND SUBSTRING_INDEX(bucket,':',-1) IN (SELECT id FROM users WHERE email LIKE 'ordertest-%@example.com');
        DELETE FROM users WHERE email LIKE 'ordertest-%@example.com';
-       DELETE FROM referral_partners WHERE referral_code IN ('VTP-TEST01','VTP-TEST02');"
+       DELETE FROM referral_partners WHERE referral_code IN ('VTP-TEST01','VTP-TEST02','VTP-TEST03','VTP-TEST04');"
   # Section 10: settings back to their prior values, its audit rows, applications and the partners approved from them.
   [ -n "${SAVED_SQL:-}" ] && sql "$SAVED_SQL"
   [ -n "${AUDIT0:-}" ] && sql "DELETE FROM audit_logs WHERE id > $AUDIT0 AND entity_type IN ('settings','referral_application','referral_partner','commission');"
@@ -1026,6 +1026,28 @@ sql "DELETE FROM rate_limits WHERE bucket LIKE 'referral-apply:%';
 app_post "$(app_json "$RG-3@example.com")"; A3=$(jget "$A" id)
 post_json "$ADMIN_TOKEN" "/api/admin/referrals/$A3/approve" '{}'
 check "approve when a partner already has that gmail -> 409 duplicate_partner, application stays pending" "$([ "$PCODE" = "409" ] && jh "$P" '"code":"duplicate_partner"' && [ "$(sql "SELECT CONCAT(application_status,(SELECT COUNT(*) FROM referral_partners WHERE gmail='$RG-3@example.com')) FROM referral_applications WHERE id=${A3:-0}")" = "pending1" ] && echo true || echo false)"
+
+# Migration 008 unique keys: races settle in the DB, the loser gets the usual 409 (never 500).
+held() { # $1 SQL run inside a transaction held open 3 s in the background (uncommitted: the API pre-check cannot see it)
+  sql "BEGIN; $1; SELECT SLEEP(3); COMMIT;" >/dev/null & HELD=$!; sleep 1
+}
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'referral-apply:%';"
+for i in 1 2 3; do curl -s -o /dev/null -w '%{http_code}\n' -X POST "$BASE_URL/api/referral/applications" -H "Content-Type: application/json" -d "$(app_json "$RG-race@example.com")" >"$TMP/race$i" & done; wait
+RACE=$(cat "$TMP/race1" "$TMP/race2" "$TMP/race3" | sort | tr '\n' ' ')
+app_post "$(app_json "$RG-RACE@Example.COM")"
+check "3 simultaneous applications, same gmail -> one 201, two 409; case/space variant 409; one row" "$([ "$RACE" = "201 409 409 " ] && [ "$ACODE" = "409" ] && jh "$A" '"code":"duplicate_application"' && [ "$(sql "SELECT COUNT(*) FROM referral_applications WHERE gmail='$RG-race@example.com'")" = "1" ] && echo true || echo false)"
+held "INSERT INTO referral_applications (name, status, phone, whatsapp, gmail) VALUES ('Held','Faculty','9876543210','9876543210','$RG-held@example.com')"
+app_post "$(app_json "$RG-HELD@example.com")"; wait $HELD
+check "application racing an uncommitted one (DB unique key, not the pre-check) -> 409 duplicate_application, one row" "$([ "$ACODE" = "409" ] && jh "$A" '"code":"duplicate_application"' && [ "$(sql "SELECT COUNT(*) FROM referral_applications WHERE gmail='$RG-held@example.com'")" = "1" ] && echo true || echo false)"
+app_post "$(app_json "$RG-2@example.com")"; A2B=$(jget "$A" id)
+check "rejected gmail may apply again -> 201 pending (old rejected row kept)" "$([ "$ACODE" = "201" ] && [ "$(sql "SELECT GROUP_CONCAT(application_status ORDER BY id) FROM referral_applications WHERE gmail='$RG-2@example.com'")" = "rejected,pending" ] && echo true || echo false)"
+held "INSERT INTO referral_partners (name, phone, whatsapp, gmail, referral_code, active) VALUES ('Held','9876543210','9876543210',' $RG-2@EXAMPLE.com','VTP-TEST04',0)"
+post_json "$ADMIN_TOKEN" "/api/admin/referrals/$A2B/approve" '{}'; wait $HELD
+check "approve racing a partner with the same gmail (case/space variant) -> 409 duplicate_partner, application pending, one partner" "$([ "$PCODE" = "409" ] && jh "$P" '"code":"duplicate_partner"' && [ "$(sql "SELECT CONCAT(application_status,(SELECT COUNT(*) FROM referral_partners WHERE gmail_key='$RG-2@example.com')) FROM referral_applications WHERE id=${A2B:-0}")" = "pending1" ] && echo true || echo false)"
+held "UPDATE referral_partners SET gmail='$RG-5@example.com' WHERE referral_code='VTP-TEST04'"
+put_json "$ADMIN_TOKEN" "/api/admin/partners/$PID1" "{\"gmail\":\"$RG-5@example.com\"}"; wait $HELD
+check "partner edit racing another partner taking that gmail -> 409 duplicate_partner, row unchanged" "$([ "$UCODE" = "409" ] && jh "$U" '"code":"duplicate_partner"' && [ "$(sql "SELECT gmail FROM referral_partners WHERE id=$PID1")" = "$RG-1@example.com" ] && echo true || echo false)"
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'referral-apply:%';"
 
 # Commissions: list, transitions
 C1=$(sql "SELECT id FROM commissions WHERE order_id=$PO1"); C2=$(sql "SELECT id FROM commissions WHERE order_id=$QO")

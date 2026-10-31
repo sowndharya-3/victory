@@ -175,6 +175,27 @@ try {
     $gone = paidReferralOrder('hardcopy');
     q("UPDATE orders SET status = 'refunded' WHERE id = ?", [cm($gone)['order_id']]);
     check('order no longer paid blocks markPayable -> refund_open', str_starts_with(attempt(fn () => CommissionService::markPayable($gone, $ADMIN)), 'refund_open|409|'));
+
+    // --- migration 008: one partner per normalised gmail, one open application per gmail ---
+    $dupErr = function (string $sql, array $p): ?\PDOException {
+        try {
+            q($sql, $p);
+            return null;
+        } catch (\PDOException $e) {
+            return $e;
+        }
+    };
+    $e = $dupErr("INSERT INTO referral_partners (name, phone, whatsapp, gmail, referral_code, active) VALUES ('Dup', '9876543210', '9876543210', ?, ?, 0)", ['  ' . strtoupper("$tag@example.com"), substr("CU$tag", 0, 30)]);
+    check('partner with a case/space variant of an existing gmail -> 1062 on uq_partner_gmail', $e !== null && \App\Database\Db::isDuplicateKey($e, 'uq_partner_gmail') && !\App\Database\Db::isDuplicateKey($e, 'uq_open_application'));
+    $ag = "cmsapp-$tag@example.com";
+    $app = fn (string $status) => $dupErr("INSERT INTO referral_applications (name, status, phone, whatsapp, gmail, application_status) VALUES ('A', 'Faculty', '9876543210', '9876543210', ?, ?)", [$ag, $status]);
+    check('two rejected applications with one gmail are allowed', $app('rejected') === null && $app('rejected') === null);
+    check('one pending allowed, a second pending -> 1062 on uq_open_application', $app('pending') === null && ($e = $app('pending')) !== null && \App\Database\Db::isDuplicateKey($e, 'uq_open_application'));
+    check('approved + pending with one gmail -> duplicate too', (q("UPDATE referral_applications SET application_status = 'approved' WHERE gmail = ? AND application_status = 'pending'", [$ag]) && ($e = $app('pending')) !== null) && \App\Database\Db::isDuplicateKey($e, 'uq_open_application'));
+    $fake = new \PDOException('x');
+    $fake->errorInfo = ['23000', 1062, "Duplicate entry 'a for key ''x.uq_partner_gmail''@b' for key 'referral_partners.PRIMARY'"];
+    check('isDuplicateKey reads the key name at the end only (value cannot spoof it)', !\App\Database\Db::isDuplicateKey($fake, 'uq_partner_gmail'));
+    q('DELETE FROM referral_applications WHERE gmail = ?', [$ag]);
 } catch (\Throwable $e) {
     echo 'FAIL: unexpected ' . get_class($e) . ': ' . $e->getMessage() . "\n";
     $failures++;
@@ -198,6 +219,7 @@ try {
     if ($partnerId) {
         q('DELETE FROM referral_partners WHERE id = ?', [$partnerId]);
     }
+    q('DELETE FROM referral_applications WHERE gmail = ?', ["cmsapp-$tag@example.com"]);
     if ($bookId) {
         q('DELETE FROM books WHERE id = ?', [$bookId]);
     }

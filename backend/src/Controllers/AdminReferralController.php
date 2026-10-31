@@ -61,7 +61,10 @@ class AdminReferralController
                         ->execute([$appId, $a['name'], $a['phone'], $a['whatsapp'], $a['upi_id'], $a['gmail'], $code]);
                     $partnerId = (int) $db->lastInsertId();
                 } catch (\PDOException $e) {
-                    // referral_code is the only unique key besides the PK: a duplicate means a code collision, retry.
+                    if (Db::isDuplicateKey($e, 'uq_partner_gmail')) {
+                        throw self::duplicatePartner(); // lost a race with another approve / partner edit
+                    }
+                    // Otherwise a duplicate can only be a referral_code collision: retry with a new code.
                     if (($e->errorInfo[1] ?? null) !== 1062 || $try >= 4) {
                         throw $e;
                     }
@@ -136,8 +139,12 @@ class AdminReferralController
             }
             if ($to) {
                 // Column names come from the FIELDS whitelist, never from the request.
-                $db->prepare('UPDATE referral_partners SET ' . implode(', ', array_map(fn ($c) => "$c = ?", array_keys($to))) . ' WHERE id = ?')
-                    ->execute([...array_values($to), $partnerId]);
+                try {
+                    $db->prepare('UPDATE referral_partners SET ' . implode(', ', array_map(fn ($c) => "$c = ?", array_keys($to))) . ' WHERE id = ?')
+                        ->execute([...array_values($to), $partnerId]);
+                } catch (\PDOException $e) {
+                    throw Db::isDuplicateKey($e, 'uq_partner_gmail') ? self::duplicatePartner() : $e;
+                }
                 CommissionService::audit((int) $admin['sub'], 'partner.update', 'referral_partner', $partnerId, ['from' => $from, 'to' => $to]);
             }
             $db->commit();
@@ -162,14 +169,19 @@ class AdminReferralController
         return $a;
     }
 
-    /** One partner per gmail (it is also the self-referral key). ponytail: no unique index; two racing approvals of different applications could both pass. */
+    /** One partner per gmail (it is also the self-referral key). Fast path; uq_partner_gmail (migration 008) settles races. */
     private static function gmailFree(string $gmail, int $exceptPartnerId): void
     {
-        $stmt = Db::connection()->prepare('SELECT 1 FROM referral_partners WHERE gmail = ? AND id <> ? LIMIT 1');
+        $stmt = Db::connection()->prepare('SELECT 1 FROM referral_partners WHERE gmail_key = LOWER(TRIM(?)) AND id <> ? LIMIT 1');
         $stmt->execute([$gmail, $exceptPartnerId]);
         if ($stmt->fetchColumn()) {
-            throw new ApiException('Another partner already uses this Gmail', 409, 'duplicate_partner');
+            throw self::duplicatePartner();
         }
+    }
+
+    private static function duplicatePartner(): ApiException
+    {
+        return new ApiException('Another partner already uses this Gmail', 409, 'duplicate_partner');
     }
 
     private static function lockPartner(int $partnerId): array
