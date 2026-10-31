@@ -192,3 +192,75 @@ Run date: 2026-10-31. One full gate run after the fix:
 | book_test.sh / http_test.sh | 25/25, 23/23 |
 
 Books 1 and 2: `/api/books` md5-identical before/after. Settings unchanged (25/25/inclusive/0/0/0/0); no partner, application, commission or ordertest rows left; this run's book_test/http_test book 186, its upload dirs and 2 users deleted.
+
+## Final verification (plan Task 15): full pass, real-browser E2E, responsive
+
+Run date: 2026-10-31, branch `sp5-orders-codes` from 8748b0b, docker compose stack, `RAZORPAY_GATEWAY=fake`, `APP_ENV=development`.
+
+### Step 1: automated pass (zero failures)
+
+| Suite | Result |
+|---|---|
+| order_test.sh | 277 passed, 0 failed |
+| admin_authz 99, refund 69, codes 60, commission 48, reader 33, order_fulfillment 27, signature_gateway 27, reconciler 25, money_pricing 14, address_validator 14, jwt 6, middleware 5, upload_validator 3, race 1 | all passed, 0 failed |
+| book_test.sh / http_test.sh | 25/25, 23/23 |
+| `npm test` | 141 passed before the fixes below; 144 passed after them (29 files) |
+| `npm run build` | ok |
+
+Leftovers of this run removed (book_test book 195 and its upload/storage dirs, 2 users); earlier archived SP-4 leftovers kept.
+`/api/books` md5 identical before and after the whole session; settings unchanged.
+
+### Step 2: browser E2E (Playwright MCP, Chromium, real browser)
+
+Vite dev server on `http://localhost:5173` (`VITE_API_URL=http://localhost:8080`, matches `FRONTEND_ORIGIN`), both real books.
+Razorpay's `checkout.js` was replaced by a stub through request interception; the fake payment signature was computed inside
+the php container (the secret never left it) and passed to the page's own `handler`, so the real `/verify` path ran.
+A throwaway admin was created with `seed_admin.php` and deleted afterwards.
+
+| Flow | Result |
+|---|---|
+| (a) admin login (wrong password shows "Invalid username or password"), both books listed, description edited and restored | pass (description editing added, see fixes); `/api/books` byte-identical after restore |
+| (b) register, buy digital English book (₹99), code shown, invalid code -> "Invalid code", redeem -> Access: Active, reader pages 1-3 via Next/Next/Prev, swipe left/right (touch events), ArrowRight | pass; real PDF pages rendered (176 pages); watermark coverage fixed (see below) |
+| (c) hard-copy Tamil book: pincode `12345` -> "Must be a valid 6-digit pincode" next to the field; valid address -> paid, tracking code `VTT-…`, `/track` shows Order Confirmed | pass |
+| (d) admin Processing -> Shipped (India Post + tracking number) -> `/track` and Account show Shipped with courier/number | pass; from processing only "shipped" is offered (cancel needs a refund) |
+| (e) code redeemed by customer 1 tried by customer 2 -> "This code has already been redeemed"; admin reissue -> old code -> "This code is no longer valid", new code redeems; failed payment -> checkout message + button re-enabled; signed `payment.failed` webhook -> order failed (`card declined`), same event id again -> `duplicate`, bad signature -> 400; result page "Payment failed … Try again" | pass |
+| (f) referral application (browser) -> admin approve (`VTP-…`) -> customer 2 buys digital Tamil book via `?ref=` -> commission ₹25 pending; refund request (API, no customer UI) -> admin Approve + Confirm in browser -> refund `refunded`, commission `reversed`, `/api/books/1/access` `{owned:false,status:"revoked"}`, page API 403, reader shows "access was revoked", My Books "Access: Revoked" | pass |
+| (g) customer 2 opening `/read/2` (customer 1's book) -> "You don't have access to this book"; `GET /api/books/2/read/pages/1` 403 | pass |
+| Form errors visible, no empty red boxes (checkout pincode, redeem, admin wrong password; every `.form-error` with empty text is `display:none`) | pass |
+
+Defects found in the browser and fixed (each its own commit, tests added): cover/index images loaded from the frontend origin
+(broken on any split deploy), admin could not edit descriptions, watermark covered only a few strips of the page (M6), result page
+promised a shipping email, no customer log out, responsive issues below.
+
+Watermark coverage (honest): before the fix 24 tiles in a box twice the page size left most of the page unmarked
+(`reader-page1-1280.jpg`, taken before the fix). After it (200 tiles) diagonal rows run about 150 px apart over the whole page
+(`reader-watermark-full-page.jpg`, `reader-390.jpg`); it is a deterrent, not DRM, and can be removed with dev tools.
+
+### Step 3: responsive (1280 / 820 / 390 px)
+
+Books, Book detail, Checkout (hard copy), My Books, Reader, Admin Orders (with detail open): horizontal page overflow
+`scrollWidth - clientWidth = 0` on all 18 after the fixes (before: header nav overflowed by 370 px at 820; book detail
+cover by 270/700 px at 820/390; pages had no side gutter). The admin orders table scrolls inside its own container.
+
+### Step 4: real Razorpay test mode
+
+Not run: keys required (U6). The Razorpay Checkout popup itself was therefore not exercised.
+
+### Screenshots (`docs/deployment/screenshots/`, JPEG, 2.5 MB total)
+
+- Responsive: `{books,book-detail,checkout,my-books,reader,admin-orders}-{1280,820,390}.jpg`
+- Admin: `admin-wrong-password.jpg`, `admin-edit-description.jpg`, `admin-order-shipped.jpg`, `admin-reissue-code.jpg`, `admin-refund-approved.jpg`
+- Customer: `order-result-digital.jpg`, `order-result-hardcopy.jpg`, `order-result-failed.jpg`, `checkout-invalid-pincode.jpg`, `checkout-payment-failed.jpg`,
+  `redeem-invalid-code.jpg`, `redeem-code-used-by-other.jpg`, `redeem-revoked-code.jpg`, `track-confirmed.jpg`, `track-shipped.jpg`, `referral-application-submitted.jpg`
+- Reader: `reader-page1-1280.jpg` (before watermark fix), `reader-page3-1280.jpg`, `reader-watermark-full-page.jpg`, `reader-tamil-book-page1.jpg`,
+  `reader-access-revoked.jpg`, `reader-denied-second-customer.jpg`
+
+Codes, emails and order numbers in the screenshots belong to test rows that were deleted after the run.
+
+### Cleanup
+
+Removed: customers `e2e-c1/e2e-c2@example.com`, their 4 orders with payments, address, access codes, book access, refund,
+commission, referral mapping, the test referral application and partner, their audit rows, webhook events, rate-limit rows,
+and the throwaway admin (only `admin` remains). Books 1 and 2 unchanged (`/api/books` md5 identical). Dev server and browser stopped.
+
+> Note: the seven reader screenshots that show pages of the owner's real books (`reader-1280/820/390.jpg`, `reader-page1-1280.jpg`, `reader-page3-1280.jpg`, `reader-tamil-book-page1.jpg`, `reader-watermark-full-page.jpg`) are kept locally in `docs/deployment/screenshots-private/` and are deliberately not committed, to avoid publishing paid book content.
