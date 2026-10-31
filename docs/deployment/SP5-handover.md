@@ -4,6 +4,12 @@ Branch `sp5-orders-codes` (from `master` 459a7bc). Status: implemented, verified
 Live deployment and the live-site check need hosting access (U7) and the owner's approval; nothing here has been run
 against production. This document contains no secrets: every key below is a variable **name** only.
 
+**Read [SP5-premerge-review.md](SP5-premerge-review.md) next.** It lists what the pre-merge hardening pass fixed, every
+item still open before production (policy pages, security headers, lost-refund-webhook handling, watermark limits,
+hosting), the owner decisions (U1-U8 and the refund/cancellation decisions D1-D10), and the Razorpay test-mode checklist.
+**Live payments stay disabled until that checklist has passed with Razorpay test credentials.** Section 12 below was
+written before the hardening pass; rows marked *Fixed* are resolved on this branch.
+
 ## 1. Features
 
 ### Completed in SP-5
@@ -67,7 +73,7 @@ CORS locked to `FRONTEND_ORIGIN`, the marketing home page.
 |---|---|
 | `79b7eee` | Covers and index file were loaded from the frontend origin (`/uploads/...` relative paths), so every cover was broken whenever frontend and API are on different hosts. Now resolved against `VITE_API_URL`. |
 | `f318a3f` | Admin book edit only exposed the title; the API accepts a description. Description textarea added. |
-| `a0d9c02` | Reader watermark (review minor M6): only 3-4 diagonal lines fell on the page, large areas uncovered. Now ~200 tiles, rows about 150 px apart, whole page covered (screenshot `reader-watermark-full-page.jpg`). |
+| `a0d9c02` | Reader watermark (review minor M6): only 3-4 diagonal lines fell on the page, large areas uncovered. Now ~200 tiles, rows about 150 px apart, whole page covered (screenshot kept locally, not committed: it shows paid book content). |
 | `a32b4c9` | Hard-copy result page promised "We will email you when it ships" although email is deferred. |
 | `8e9a389` | Customers had no way to log out. |
 | `aad2327` | Responsive: header nav overflowed between 769 and ~1250 px; 8 pages had no side gutter; book detail cover rendered at 1075 px; admin nav links ran together. |
@@ -213,20 +219,22 @@ Full detail and screenshot list: `backend/TEST_RESULTS.md` (section "Final verif
 | U7 | Hosting: HTTPS API URL, Poppler install, cron, PHP-FPM workers, supported base image | Dev only |
 | - | Approval of book descriptions and categories | Current text on books 1 and 2 |
 | - | Email notifications (order confirmation, code, shipping) | Deferred; nothing is emailed; the UI no longer promises email |
+| U8 | Guest checkout; can a customer cancel a hard copy before it ships? | Login required; cancel = refund request through the API only |
+| D1-D10 | Refund and cancellation policy (windows, redeemed codes, hard-copy returns, partial refunds, commission clawback) | See [SP5-premerge-review.md](SP5-premerge-review.md) section 3 |
 
 ## 12. Known issues / pre-deploy hardening
 
 | Severity | Issue | Suggested fix |
 |---|---|---|
-| High (prod) | Base image `php:8.2-fpm-bullseye` is EOL (packages from archive.debian.org) | Build on bookworm; re-check `poppler-utils` |
-| Medium | Reader renderer: blocking `flock` with no timeout + 30 s render; a corrupt PDF can tie up FPM workers (up to ~150 s with 5 workers) | `LOCK_NB` + deadline, remember failed pages; raise `pm.max_children` |
-| Medium | No render size cap (huge page sizes render huge JPEGs) | `pdftoppm -scale-to 1600` or a page-size check |
-| Medium | Re-uploading a PDF is not atomic; stale `page_count` race | Temp file + rename; `UPDATE ... WHERE page_count IS NULL` |
+| *Fixed* | Base image `php:8.2-fpm-bullseye` was EOL (packages from archive.debian.org) | Now `php:8.2-fpm-trixie`; MySQL 8.0 / PHP 8.2 end-of-life dates still need a plan (premerge F-11) |
+| *Fixed* (still set `pm.max_children >= 10`) | Reader renderer: blocking `flock` with no timeout + 30 s render could tie up FPM workers | Lock with deadline, failed-page memory, resource limits |
+| *Fixed* | No render size cap | Page-size and resource limits |
+| *Fixed* | Re-uploading a PDF not atomic; stale `page_count` race | Temp file + rename; guarded `page_count` write |
 | Medium | No customer refund-request UI (API exists: `POST /api/me/orders/:id/refund-request`) | Add a "Request refund" button on Account orders, or document that customers contact support and admins use "Refund this order" |
-| Low | `pdfinfo` "Pages" regex takes the first match (a crafted Title could spoof it) | Use the last match / anchor with `\z` |
+| *Fixed* | `pdfinfo` "Pages" regex took the first match (a crafted Title could spoof it) | Anchored, last match, bounded |
 | Low | Admin cancel after shipping moves no money; refund must be issued separately | Document for admins; optional prompt to refund |
 | Low | Residual payout race: a refund opened just after the hold check leaves the commission `paid` + `clawback_due` | Re-check under a lock, or accept and handle clawback manually |
-| Low | Duplicate-partner race (no unique index on partner gmail / application id) | Add UNIQUE indexes in a migration 008 |
+| *Fixed* | Duplicate-partner race (no unique index on partner gmail / application id) | Migration 008 (run the pre-check in `backend/scripts/premigration_checks.sql` first) |
 | Low | Deactivated partner still earns on orders created before deactivation; `clawbackDue` never clears | Business rule (U4); add "clawback settled" action |
 | Low | `/api/track/:code` returns courier + tracking number to anyone holding the code (by design) | Accepted; codes are random 8 chars, rate limited |
 | Low | `amount_mismatch` orders stay pending and are re-polled every cron run | Admin resolves manually (README) |
