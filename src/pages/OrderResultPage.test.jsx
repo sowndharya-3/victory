@@ -89,7 +89,7 @@ test('hard copy paid shows shipping city and the email promise', async () => {
   renderPage()
   expect(await screen.findByText(/payment received/i)).toBeInTheDocument()
   expect(screen.getByText(/ship to chennai/i)).toBeInTheDocument()
-  expect(screen.getByText(/we will email you when it ships/i)).toBeInTheDocument()
+  expect(screen.getByText(/use your tracking code below/i)).toBeInTheDocument()
 })
 
 test('fetch error shows the error message', async () => {

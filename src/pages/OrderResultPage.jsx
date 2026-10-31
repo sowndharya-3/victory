@@ -103,7 +103,7 @@ function OrderResultPage() {
         </div>
         <PriceBreakdown quote={order} />
         {hardcopy ? (
-          <p>We will ship to {order.address?.city}. We will email you when it ships.</p>
+          <p>We will ship to {order.address?.city}. Use your tracking code below to follow it.</p>
         ) : (
           <p>Your digital order is listed in <Link to="/account">your account</Link>.</p>
         )}
