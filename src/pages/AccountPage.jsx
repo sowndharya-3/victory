@@ -48,6 +48,13 @@ function AccountPage() {
     }
   }
 
+  const logout = () => {
+    localStorage.removeItem('vtee-auth-token')
+    setOrders(null)
+    setOrdersError('')
+    dispatch({ type: 'LOGOUT_CUSTOMER' })
+  }
+
   if (!state.customerEmail) {
     return (
       <>
@@ -85,6 +92,7 @@ function AccountPage() {
       <div className="container">
         <h2>My Orders</h2>
         <p><Link to="/my-books">My Books</Link> · <Link to="/track">Track an order</Link></p>
+        <button type="button" className="btn btn-outline" onClick={logout}>Log Out</button>
         <div aria-live="polite">
           {ordersError && <p className="form-error">{ordersError}</p>}
           {!ordersError && orders === null && <p>Loading orders…</p>}

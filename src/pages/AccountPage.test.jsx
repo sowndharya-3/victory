@@ -92,3 +92,11 @@ test('shows the backend error message on failed login', async () => {
     expect(screen.getByText(/invalid email or password/i)).toBeInTheDocument()
   })
 })
+
+test('log out clears the token and shows the login form again', async () => {
+  await logIn([])
+  await waitFor(() => expect(screen.getByText(/no orders yet/i)).toBeInTheDocument())
+  fireEvent.click(screen.getByRole('button', { name: /log out/i }))
+  expect(localStorage.getItem('vtee-auth-token')).toBeNull()
+  expect(screen.getByRole('heading', { name: /log in/i })).toBeInTheDocument()
+})
