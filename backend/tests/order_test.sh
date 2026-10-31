@@ -683,6 +683,20 @@ check "access: non-owner {owned:false,status:none}; no token 401; admin 403" "$(
 hdr_get "$TOKEN_L" "/api/books/$RB/read/pages/1"
 check "owner page 1 -> 200 image/jpeg, body starts FF D8 FF" "$([ "$RCODE" = "200" ] && [ "$(hdr Content-Type)" = "image/jpeg" ] && [ "$(head -c 3 "$TMP/r.bin" | od -An -tx1 | tr -d ' \n')" = "ffd8ff" ] && echo true || echo false)"
 check "page headers: Cache-Control private, no-store; nosniff" "$([ "$(hdr Cache-Control)" = "private, no-store" ] && [ "$(hdr X-Content-Type-Options)" = "nosniff" ] && echo true || echo false)"
+check "page headers: each sent once (nginx defaults do not duplicate PHP's)" "$([ "$(grep -ci '^cache-control:' "$TMP/r.h")" = "1" ] && [ "$(grep -ci '^x-content-type-options:' "$TMP/r.h")" = "1" ] && echo true || echo false)"
+# nginx API security headers (backend/nginx/default.conf).
+api_hdrs() { curl -s -D "$TMP/r.h" -o /dev/null "${@:2}" "$BASE_URL$1"; }
+API_HDR_OK=true
+for spec in "/api/health" "/api/me" "/api/books" "/api/me/orders|-H|Authorization: Bearer $TOKEN_L"; do
+  IFS='|' read -r -a A <<<"$spec"
+  api_hdrs "${A[@]}"
+  [ "$(hdr X-Content-Type-Options)" = "nosniff" ] && [ "$(hdr Referrer-Policy)" = "no-referrer" ] && [ "$(hdr Cache-Control)" = "no-store" ] \
+    && [ "$(hdr Content-Security-Policy)" = "default-src 'none'; frame-ancestors 'none'" ] && [ "$(grep -ci '^cache-control:' "$TMP/r.h")" = "1" ] \
+    && ! grep -qi '^x-powered-by:' "$TMP/r.h" && ! grep -qi '^server: nginx/' "$TMP/r.h" || API_HDR_OK=false
+done
+check "API headers on health / JSON 401 / public list / personal list: nosniff, no-referrer, no-store, CSP none; no versions" "$API_HDR_OK"
+api_hdrs "/uploads/books/$RB/cover.jpg"; C1=$(head -1 "$TMP/r.h" | cut -d' ' -f2)
+check "/uploads file: nosniff, no CSP frame-ancestors / X-Frame-Options (index PDF is framed by the frontend)" "$([ "$C1" = "200" ] && [ "$(hdr X-Content-Type-Options)" = "nosniff" ] && ! grep -qi '^content-security-policy:\|^x-frame-options:' "$TMP/r.h" && echo true || echo false)"
 hdr_get "$TOKEN_L" "/api/books/$RB/read/pages/$PAGES"
 check "owner last page ($PAGES) -> 200 image/jpeg" "$([ "$RCODE" = "200" ] && [ "$(hdr Content-Type)" = "image/jpeg" ] && echo true || echo false)"
 hdr_get "$TOKEN_M" "/api/books/$RB/read/pages/1"; C1=$RCODE; B1=$(cat "$TMP/r.bin")
