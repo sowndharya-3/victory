@@ -78,6 +78,29 @@ function tempBook(?string $pdfSource): int
     return $id;
 }
 
+/** Minimal valid PDF: $pages blank pages of $mediaBox; $title is a raw PDF string body (escapes like \n apply). */
+function makePdf(string $path, string $mediaBox, int $pages, string $title = 'T'): void
+{
+    $kids = implode(' ', array_map(fn ($i) => (4 + $i) . ' 0 R', range(0, $pages - 1)));
+    $objs = ['<< /Type /Catalog /Pages 2 0 R >>', "<< /Type /Pages /Kids [" . ($pages ? $kids : '') . "] /Count $pages >>", "<< /Title ($title) >>"];
+    for ($i = 0; $i < max($pages, 1); $i++) {
+        $objs[] = "<< /Type /Page /Parent 2 0 R /MediaBox [$mediaBox] >>";
+    }
+    $pdf = "%PDF-1.4\n";
+    $off = [];
+    foreach ($objs as $i => $o) {
+        $off[] = strlen($pdf);
+        $pdf .= ($i + 1) . " 0 obj\n$o\nendobj\n";
+    }
+    $xref = strlen($pdf);
+    $pdf .= "xref\n0 " . (count($objs) + 1) . "\n0000000000 65535 f \n";
+    foreach ($off as $o) {
+        $pdf .= sprintf("%010d 00000 n \n", $o);
+    }
+    $pdf .= "trailer\n<< /Size " . (count($objs) + 1) . " /Root 1 0 R /Info 3 0 R >>\nstartxref\n$xref\n%%EOF\n";
+    file_put_contents($path, $pdf);
+}
+
 function rmTree(string $dir): void
 {
     if (!is_dir($dir)) {
@@ -163,8 +186,92 @@ try {
     check('corrupt PDF -> 500 render_failed, no stderr leaked', $e?->statusCode === 500 && $e?->errorCode === 'render_failed' && leaksNothing($e), $e?->getMessage() ?? 'no exception');
     $db->exec("UPDATE books SET page_count = 2 WHERE id = $bad");
     [$e] = attempt(fn () => PdfPageRenderer::pagePath($bad, 1));
-    check('render of corrupt PDF -> 500 render_failed, no jpg, no temp files', $e?->errorCode === 'render_failed' && leaksNothing($e)
-        && array_values(array_diff(scandir("$STORAGE/$bad/pages"), ['.', '..', '1.lock'])) === []);
+    check('render of corrupt PDF -> 500 render_failed, no jpg, no temp files (only lock + failure marker)', $e?->errorCode === 'render_failed' && leaksNothing($e)
+        && array_values(array_diff(scandir("$STORAGE/$bad/pages"), ['.', '..', '1.lock', '1.failed'])) === []);
+
+    // ---- negative cache: a failed page is not re-rendered for FAIL_TTL, even once the PDF is fine
+    copy($fixture, "$STORAGE/$bad/book.pdf");
+    [$e] = attempt(fn () => PdfPageRenderer::pagePath($bad, 1));
+    check('failed page remembered: fixed PDF still render_failed within TTL, no jpg', $e?->errorCode === 'render_failed' && !is_file("$STORAGE/$bad/pages/1.jpg"));
+    PdfPageRenderer::invalidate($bad);
+    $db->exec("UPDATE books SET page_count = NULL WHERE id = $bad");
+    check('invalidate clears failure markers (info + page); page renders again', !is_file("$STORAGE/$bad/info.failed") && !is_file("$STORAGE/$bad/pages/1.failed")
+        && is_file(PdfPageRenderer::pagePath($bad, 1)));
+
+    // ---- digit validation: no trailing newline, no leading zero
+    foreach (["12\n", "1\n", '01', '0', '007'] as $raw) {
+        check('positiveInt(' . json_encode($raw) . ') -> 404 not_found', rejected(fn () => ReaderController::positiveInt($raw), 404, 'not_found'));
+    }
+    check('positiveInt("999999999") === 999999999', ReaderController::positiveInt('999999999') === 999999999);
+
+    // ---- crafted PDFs (generated here, a few hundred bytes each)
+    $title = tempBook(null);
+    mkdir("$STORAGE/$title", 0755, true);
+    makePdf("$STORAGE/$title/book.pdf", '0 0 200 300', 1, 'x\nPages: 9999');
+    $raw = (string) shell_exec('pdfinfo ' . escapeshellarg("$STORAGE/$title/book.pdf") . ' 2>/dev/null');
+    check('fixture: Title injects a "Pages: 9999" line into pdfinfo output', (bool) preg_match('/^Pages:\s+9999$/m', $raw));
+    check('Title "Pages: 9999" injection ignored -> pageCount 1', PdfPageRenderer::pageCount($title) === 1);
+
+    $zero = tempBook(null);
+    mkdir("$STORAGE/$zero", 0755, true);
+    makePdf("$STORAGE/$zero/book.pdf", '0 0 200 300', 0);
+    [$e] = attempt(fn () => PdfPageRenderer::pageCount($zero));
+    check('zero-page PDF -> 500 render_failed, page_count stays NULL', $e?->errorCode === 'render_failed'
+        && $db->query("SELECT page_count FROM books WHERE id = $zero")->fetchColumn() === null);
+
+    $huge = tempBook(null);
+    mkdir("$STORAGE/$huge", 0755, true);
+    makePdf("$STORAGE/$huge/book.pdf", '0 0 14400 14400', 1);
+    $t = microtime(true);
+    [$e] = attempt(fn () => PdfPageRenderer::pagePath($huge, 1));
+    check('oversize page (14400 pt MediaBox) -> render_failed before pdftoppm, no jpg', $e?->errorCode === 'render_failed' && leaksNothing($e)
+        && !glob("$STORAGE/$huge/pages/*.jpg") && microtime(true) - $t < 5);
+    makePdf("$STORAGE/$huge/book.pdf", '0 0 4900 4900', 1); // each side under 5000 pt, but ~56 MP at 110 dpi
+    PdfPageRenderer::invalidate($huge);
+    [$e] = attempt(fn () => PdfPageRenderer::pagePath($huge, 1));
+    check('page over the pixel cap (4900 pt square) -> render_failed', $e?->errorCode === 'render_failed' && !glob("$STORAGE/$huge/pages/*.jpg"));
+
+    // ---- wall-clock timeout: the child is SIGKILLed and reaped (no process, no zombie left)
+    $t = microtime(true);
+    [$e] = attempt(fn () => PdfPageRenderer::run(['sleep', '37.25'], 'fake slow tool', 1));
+    $elapsed = microtime(true) - $t;
+    check('slow tool -> render_failed after ~1 s timeout', $e?->errorCode === 'render_failed' && $elapsed >= 0.9 && $elapsed < 4, sprintf('%.1fs', $elapsed));
+    $left = [];
+    foreach (glob('/proc/[0-9]*/stat') ?: [] as $stat) {
+        if (preg_match('/\((sleep|prlimit)\)/', (string) @file_get_contents($stat))) {
+            $left[] = $stat;
+        }
+    }
+    check('timed-out child killed and reaped (no sleep/prlimit process or zombie)', $left === [], implode(',', $left));
+    check('PdfPageRenderer::TIMEOUT_SECONDS is 30', PdfPageRenderer::TIMEOUT_SECONDS === 30);
+
+    // ---- busy lock: a second worker waits at most the lock budget, then 503 render_busy (no failure marker)
+    $lockFh = fopen("$STORAGE/$id/pages/2.lock", 'c');
+    flock($lockFh, LOCK_EX);
+    PdfPageRenderer::$lockWaitSeconds = 1;
+    $t = microtime(true);
+    [$e] = attempt(fn () => PdfPageRenderer::pagePath($id, 2));
+    $elapsed = microtime(true) - $t;
+    check('page locked by another renderer -> 503 render_busy after ~1 s', $e?->statusCode === 503 && $e?->errorCode === 'render_busy' && $elapsed >= 0.9 && $elapsed < 3, sprintf('%.1fs', $elapsed));
+    check('busy leaves no failure marker', !is_file("$STORAGE/$id/pages/2.failed"));
+    flock($lockFh, LOCK_UN);
+    fclose($lockFh);
+    PdfPageRenderer::$lockWaitSeconds = PdfPageRenderer::LOCK_WAIT_SECONDS;
+    check('lock released -> page renders', is_file(PdfPageRenderer::pagePath($id, 2)));
+
+    // ---- re-upload: atomic replace (new inode) + invalidate removes pages, markers and render leftovers
+    file_put_contents("$STORAGE/$id/pages/.tmp-3-deadbeef.jpg", 'x');
+    touch("$STORAGE/$id/pages/3.failed");
+    copy($fixture, "$STORAGE/$id/.tmp-upload-test.pdf");
+    rename("$STORAGE/$id/.tmp-upload-test.pdf", "$STORAGE/$id/book.pdf");
+    PdfPageRenderer::invalidate($id);
+    $files = array_values(array_diff(scandir("$STORAGE/$id/pages"), ['.', '..']));
+    check('invalidate removes jpgs, .failed markers and .tmp-* leftovers (locks only remain)', $files === ['1.lock', '2.lock', '3.lock'], implode(',', $files));
+    check('after re-upload: page_count recomputed (3) and page 3 renders', PdfPageRenderer::pageCount($id) === 3 && is_file(PdfPageRenderer::pagePath($id, 3)));
+
+    // ---- a cached page that vanished before sending -> JSON 503, never an empty image
+    [$e] = attempt(fn () => ReaderController::sendJpeg("$STORAGE/$id/pages/999.jpg"));
+    check('sendJpeg of a vanished file -> 503 render_busy (no image headers)', $e?->statusCode === 503 && $e?->errorCode === 'render_busy');
 } catch (Throwable $e) {
     echo 'FAIL: unexpected ' . get_class($e) . ': ' . $e->getMessage() . "\n";
     $failures++;

@@ -168,8 +168,14 @@ class AdminBookController
             throw new ApiException('Failed to create upload directory', 500, 'upload_failed');
         }
         $destination = "{$dir}/book.pdf";
-        if (!move_uploaded_file($_FILES['file']['tmp_name'], $destination)) {
-            throw new ApiException('Failed to save uploaded file', 500, 'upload_failed');
+        // Same-directory temp + rename: readers see the old PDF or the new one, never a half-written file.
+        $tmp = "{$dir}/.tmp-upload-" . bin2hex(random_bytes(6)) . '.pdf';
+        try {
+            if (!move_uploaded_file($_FILES['file']['tmp_name'], $tmp) || !rename($tmp, $destination)) {
+                throw new ApiException('Failed to save uploaded file', 500, 'upload_failed');
+            }
+        } finally {
+            @unlink($tmp);
         }
         Db::connection()->prepare('UPDATE books SET digital_file_path = :path WHERE id = :id')
             ->execute(['path' => $destination, 'id' => $id]);

@@ -22,7 +22,14 @@ class ReaderController
         $status = self::accessStatus($userId, $bookId);
         $body = ['owned' => $status === 'active', 'status' => $status];
         if ($status === 'active') {
-            $body['pageCount'] = PdfPageRenderer::pageCount($bookId);
+            try {
+                $body['pageCount'] = PdfPageRenderer::pageCount($bookId);
+            } catch (ApiException $e) {
+                // Owned but no usable PDF yet: no pageCount; the reader shows "not available to read yet".
+                if ($e->errorCode !== 'render_failed') {
+                    throw $e;
+                }
+            }
         }
         header('Cache-Control: private, no-store');
         echo json_encode($body);
@@ -37,19 +44,32 @@ class ReaderController
         if (self::accessStatus($userId, $bookId) !== 'active') {
             throw new ApiException('You do not have access to this book', 403, 'forbidden');
         }
-        $path = PdfPageRenderer::pagePath($bookId, self::positiveInt($n));
+        self::sendJpeg(PdfPageRenderer::pagePath($bookId, self::positiveInt($n)));
+    }
 
+    /** Opens the cached page before any image header: a file removed by a re-upload meanwhile is a JSON 503, never an empty 200 JPEG. */
+    public static function sendJpeg(string $path): void
+    {
+        $fh = @fopen($path, 'rb');
+        $size = $fh === false ? false : fstat($fh)['size'];
+        if (!$size) {
+            if ($fh !== false) {
+                fclose($fh);
+            }
+            throw new ApiException('The page is being prepared, please retry shortly', 503, 'render_busy');
+        }
         header('Content-Type: image/jpeg');
         header('Cache-Control: private, no-store');
         header('X-Content-Type-Options: nosniff');
-        header('Content-Length: ' . filesize($path));
-        readfile($path);
+        header('Content-Length: ' . $size);
+        fpassthru($fh);
+        fclose($fh);
     }
 
-    /** Route segments are strings: only 1-9 plain digits are ids, anything else is 404. */
+    /** Route segments are strings: only 1-9 plain digits without a leading zero are ids, anything else is 404. */
     public static function positiveInt(string $raw): int
     {
-        if (!preg_match('/^\d{1,9}$/', $raw)) {
+        if (!preg_match('/^[1-9][0-9]{0,8}\z/', $raw)) {
             throw new ApiException('Not found', 404, 'not_found');
         }
         return (int) $raw;

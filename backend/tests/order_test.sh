@@ -48,6 +48,7 @@ cleanup() {
          DELETE FROM book_access WHERE book_id=$BOOK_ID;
          DELETE FROM orders WHERE book_id=$BOOK_ID;
          DELETE FROM book_preview_pages WHERE book_id=$BOOK_ID; DELETE FROM books WHERE id=$BOOK_ID;"
+    docker compose exec -T php rm -rf "storage/books/$BOOK_ID" >/dev/null 2>&1
   fi
   # Section 8 orders the real book 2: remove every row hanging off test users, whatever the book.
   TU="SELECT id FROM users WHERE email LIKE 'ordertest-%@example.com'"
@@ -702,6 +703,24 @@ BURST=$(curl -s -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN_L" "${ARGS[
 hdr_get "$TOKEN_L" "/api/books/$RB/read/pages/1"; C1=$RCODE; B1=$(cat "$TMP/r.bin")
 hdr_get "$TOKEN_M" "/api/books/$RB/read/pages/1"
 check "240 page calls -> 200, 241st -> 429 rate_limited; other user (same IP) unaffected" "$([ "$BURST" = "240 200" ] && [ "$C1" = "429" ] && jh "$B1" '"code":"rate_limited"' && [ "$RCODE" = "403" ] && echo true || echo false)"
+sql "DELETE FROM rate_limits WHERE bucket='reader-page:$UID_L';"
+
+# Hardening: strict page digits; owner of a book without a PDF; atomic re-upload + invalidate
+CODES=""
+for p in "1%0A" "01" "1%20"; do hdr_get "$TOKEN_L" "/api/books/$RB/read/pages/$p"; CODES="$CODES $RCODE"; done
+check "page 1<LF>, 01, '1 ' -> 404" "$([ "$CODES" = " 404 404 404" ] && echo true || echo false)"
+sql "INSERT INTO book_access (user_id, book_id) VALUES ($UID_L, $BOOK_ID);"
+get_json "$TOKEN_L" "/api/books/$BOOK_ID/access"
+check "access: owner of a book with no PDF -> 200 {owned:true,status:active} without pageCount" "$([ "$GCODE" = "200" ] && [ "$G" = '{"owned":true,"status":"active"}' ] && echo true || echo false)"
+FIX="$(dirname "$0")/fixtures/reader.pdf"
+up_pdf() { curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/admin/books/$BOOK_ID/pdf" -H "Authorization: Bearer $ADMIN_TOKEN" -F "file=@$FIX;type=application/pdf"; }
+S1=$(up_pdf)
+get_json "$TOKEN_L" "/api/books/$BOOK_ID/access"; G1=$G
+hdr_get "$TOKEN_L" "/api/books/$BOOK_ID/read/pages/2"; C1=$RCODE
+S2=$(up_pdf)
+LEFT=$(docker compose exec -T php sh -c "cd storage/books/$BOOK_ID && ls -A . pages" 2>/dev/null | tr -s '\n\r' ' ')
+get_json "$TOKEN_L" "/api/books/$BOOK_ID/access"
+check "upload PDF -> pageCount 3, page renders; re-upload -> 200, cache cleared, no .tmp leftovers, count recomputed" "$([ "$S1" = "200" ] && [ "$G1" = '{"owned":true,"status":"active","pageCount":3}' ] && [ "$C1" = "200" ] && [ "$S2" = "200" ] && ! echo "$LEFT" | grep -Eq '\.tmp-|[0-9]\.jpg|\.failed' && echo "$LEFT" | grep -q 'book.pdf' && [ "$G" = '{"owned":true,"status":"active","pageCount":3}' ] && echo true || echo false)"
 sql "DELETE FROM rate_limits WHERE bucket='reader-page:$UID_L';"
 
 # Revoked: refund the book 2 order (finalised by admin approve) -> reader 403
