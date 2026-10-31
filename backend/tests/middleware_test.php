@@ -53,6 +53,27 @@ $_SERVER['HTTP_AUTHORIZATION'] = "Bearer {$adminToken}";
 $payload = AuthMiddleware::requireRole(['admin']);
 assertTrue($payload['role'] === 'admin', 'admin token on an admin-only route is accepted');
 
+// --- Authorization header sources (nginx/FPM, Apache rewrite, mod_php / getallheaders).
+$h = fn(array $server, array $headers = []) => AuthMiddleware::authorizationHeader($server, $headers);
+assertTrue($h(['HTTP_AUTHORIZATION' => 'Bearer a']) === 'Bearer a', 'auth header: HTTP_AUTHORIZATION');
+assertTrue($h(['REDIRECT_HTTP_AUTHORIZATION' => 'Bearer b']) === 'Bearer b', 'auth header: REDIRECT_HTTP_AUTHORIZATION (Apache rewrite)');
+assertTrue($h(['HTTP_AUTHORIZATION' => 'Bearer a', 'REDIRECT_HTTP_AUTHORIZATION' => 'Bearer b']) === 'Bearer a', 'auth header: HTTP_AUTHORIZATION wins');
+assertTrue($h(['HTTP_AUTHORIZATION' => ''], ['authorization' => 'Bearer c']) === 'Bearer c', 'auth header: empty server var falls back to request headers, case-insensitive');
+assertTrue($h([], ['AUTHORIZATION' => 'Bearer d', 'Host' => 'x']) === 'Bearer d', 'auth header: apache_request_headers upper-case name');
+assertTrue($h([], ['Host' => 'x']) === '', 'auth header: absent -> empty');
+assertTrue($h(['HTTP_AUTHORIZATION' => ['x']], ['Authorization' => ['y']]) === '', 'auth header: non-string values ignored');
+unset($_SERVER['HTTP_AUTHORIZATION']);
+$_SERVER['REDIRECT_HTTP_AUTHORIZATION'] = "Bearer {$adminToken}";
+assertTrue(AuthMiddleware::requireRole(['admin'])['role'] === 'admin', 'requireRole accepts a token from REDIRECT_HTTP_AUTHORIZATION');
+$_SERVER['REDIRECT_HTTP_AUTHORIZATION'] = "Basic {$adminToken}";
+try {
+    AuthMiddleware::requireRole(['admin']);
+    assertTrue(false, 'requireRole: non-Bearer scheme rejected with 401');
+} catch (ApiException $e) {
+    assertTrue($e->statusCode === 401, 'requireRole: non-Bearer scheme rejected with 401');
+}
+unset($_SERVER['REDIRECT_HTTP_AUTHORIZATION']);
+
 // --- ErrorHandler: unexpected exceptions are logged (class + message only), ApiException is not.
 $logFile = tempnam(sys_get_temp_dir(), 'eh');
 ini_set('error_log', $logFile);

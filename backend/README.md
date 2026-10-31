@@ -22,6 +22,17 @@ full design.
    fresh deploy won't have them yet, and this codebase can't create them for
    itself if the process lacks permission to do so.
 
+### Apache hosting
+
+The recommended API host is a VPS running this Docker/nginx stack. For Apache/LiteSpeed (document root =
+`backend/public`, API at the root of its host) `backend/public/.htaccess` mirrors the nginx rules: front controller
+to `index.php` unless the request is an existing public file, 404 for `uploads/books/*/book.pdf`, any `uploads/.../pages/`
+path, dot-files and any PHP file other than `index.php`; no directory listings; no `Options` directives (they 500 on
+hosts without `AllowOverride Options`). It copies `Authorization` into the environment (`SetEnvIf` plus a rewrite
+fallback), and `AuthMiddleware` reads `HTTP_AUTHORIZATION`, then `REDIRECT_HTTP_AUTHORIZATION`, then
+`apache_request_headers()`/`getallheaders()` (case-insensitive); only a `Bearer` token is accepted. Check on the host:
+`curl -s https://<api>/api/me -H "Authorization: Bearer x"` must answer `invalid_token`, not `unauthorized`.
+
 ## Environment variables
 
 See `backend/.env.example` for the full list: `DB_HOST`, `DB_PORT`,

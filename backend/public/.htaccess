@@ -1,0 +1,43 @@
+# Apache hosting for the API (document root = backend/public). The recommended host is a VPS with the
+# Docker/nginx stack (backend/nginx/default.conf); this file mirrors its rules for Apache/LiteSpeed.
+# No "Options" directives on purpose: hosts that disallow AllowOverride Options answer 500 for them.
+
+DirectoryIndex index.php
+
+<IfModule mod_setenvif.c>
+    # Apache + PHP-FPM/CGI drops Authorization unless it is copied into the environment.
+    SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
+</IfModule>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Fallback copy of Authorization (arrives in PHP as HTTP_AUTHORIZATION or REDIRECT_HTTP_AUTHORIZATION).
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # Full books are served only by the authorised reader API: never the PDF or a page cache.
+    # (Only under uploads/: /api/books/{id}/read/pages/{n} is the reader route itself.)
+    RewriteRule ^uploads/books/[^/]+/book\.pdf$ - [R=404,L,NC]
+    RewriteRule ^uploads/(.*/)?pages(/|$) - [R=404,L,NC]
+
+    # Dot-files (.env, .git, .htaccess) except .well-known.
+    RewriteRule (^|/)\.(?!well-known(/|$)) - [R=404,L]
+
+    # No PHP other than the front controller.
+    RewriteRule ^(?!index\.php$).*\.(php[0-9]?|phtml|phar)$ - [R=404,L,NC]
+
+    # Front controller: everything that is not an existing public file goes to index.php.
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^ index.php [L,QSA]
+</IfModule>
+
+# Without mod_rewrite routing does not work at all; at least keep dot-files (.env) closed.
+<IfModule !mod_rewrite.c>
+    <FilesMatch "^\.">
+        Require all denied
+    </FilesMatch>
+</IfModule>
+
+# Directory listing: none without an Options directive, because a directory is never an existing file, so the
+# front controller above answers it (JSON 404).
