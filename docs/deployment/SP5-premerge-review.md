@@ -117,3 +117,25 @@ Needs the owner's **test** keys. Until every box below is ticked, live payments 
 - Razorpay Checkout popup, real payments, real webhooks, real refunds (section 4).
 - The Apache `.htaccess`, the nginx snippet and Netlify/Cloudflare `_redirects` rules were only imitated by a local test server; follow the post-deploy checklist in [frontend-hosting.md](frontend-hosting.md) on the first deploy.
 - The customer refund request was exercised through the API only; there is no screen.
+
+## 6. Operational notes from the hardening pass
+
+**Deploy order.** Back up the database, run `backend/scripts/premigration_checks.sql` (every query must return zero rows), then apply migrations 003 to 008 in order. On every deploy run `php scripts/check_config.php` (in Docker: `docker compose exec -T php php scripts/check_config.php`); it must exit 0.
+
+**Environment policy (enforced at startup, fail closed).**
+- The fake gateway is allowed only when `APP_ENV` is exactly one of `development`, `dev`, `local`, `test`, `testing` (case-sensitive). Any other value, including unset, empty, `production`, `Production`, `prod` and `staging`, is treated as production.
+- Outside development the live gateway needs a key id starting `rzp_test_` or `rzp_live_`, a key secret of at least 20 characters, a webhook secret of at least 32 characters, and no placeholder text.
+- `JWT_SECRET` and `CODE_SECRET` need at least 32 characters and no placeholder in every environment.
+- Error messages name the variable, never its value. `.env.example` defaults to production plus the live gateway with empty keys; the local `backend/.env` sets development plus fake for the test suite.
+
+**Runtime image.** `php:8.2-fpm-trixie` (PHP 8.2.35, Debian 13, Poppler 25.03). Bullseye had been pinned because of a dev-host "exec format error" that no longer occurs. PHP 8.4 was tried and rejected for now: from PHP 8.3, `http_response_code()` stops working once output has started, which breaks two test harnesses (`admin_authz_test`, `middleware_test`) that print before calling controllers. To move to 8.4, add output buffering to those harnesses. PHP 8.2 security support ends 2026-12-31. `mysql:8.0` is unchanged (end of life April 2026; upgrade needs its own plan and a data-volume backup). `nginx:alpine` is a floating tag and should be pinned on the production host. The previous image is kept locally as `vtee-php:bullseye-backup` for rollback.
+
+**New or changed API behaviour.**
+- `render_busy` (503, `Retry-After: 5`) on reader pages and `/access` when a page is being rendered or vanished mid-request; the reader's Retry button covers it.
+- `rate_limited` (429) on both logins.
+- `duplicate_application` and `duplicate_partner` (409) are now also returned on races; they were a 500 before.
+- `/access` for an owner whose book has no usable PDF returns 200 without `pageCount` (it was a 500).
+- The reader memory cap is 1 GiB per render; a very complex page may fail with `render_failed` and is then remembered for 60 seconds.
+- Encrypted PDFs fail in `pdfinfo` and give `render_failed` (no fixture was available to test this).
+
+**Decision recorded.** Phone, WhatsApp and UPI are deliberately not unique across partners (people can share them); only the email is. Rejected applications may re-apply.
