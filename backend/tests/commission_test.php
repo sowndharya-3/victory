@@ -170,8 +170,11 @@ try {
         $rf = $openRefund($held, $st);
         check("$st refund blocks markPaid -> refund_open 409", str_starts_with(attempt(fn () => CommissionService::markPaid($held, $ADMIN, 'UPI-9')), 'refund_open|409|') && cm($held)['status'] === 'payable');
         q("UPDATE refunds SET status = 'failed' WHERE id = ?", [$rf]);
+        // Failed without a gateway refund id (may have timed out after Razorpay refunded): still on hold.
+        check("$st refund failed without a refund id still holds markPaid", str_starts_with(attempt(fn () => CommissionService::markPaid($held, $ADMIN, 'UPI-9')), 'refund_open|409|'));
+        q("UPDATE refunds SET razorpay_refund_id = CONCAT('rfnd_ctest_', id) WHERE id = ?", [$rf]); // a real refund.failed
     }
-    check('after the refund failed markPaid works', attempt(fn () => CommissionService::markPaid($held, $ADMIN, 'UPI-9')) === 'ok' && cm($held)['status'] === 'paid');
+    check('after the refund failed (gateway refund.failed) markPaid works',attempt(fn () => CommissionService::markPaid($held, $ADMIN, 'UPI-9')) === 'ok' && cm($held)['status'] === 'paid');
     $gone = paidReferralOrder('hardcopy');
     q("UPDATE orders SET status = 'refunded' WHERE id = ?", [cm($gone)['order_id']]);
     check('order no longer paid blocks markPayable -> refund_open', str_starts_with(attempt(fn () => CommissionService::markPayable($gone, $ADMIN)), 'refund_open|409|'));

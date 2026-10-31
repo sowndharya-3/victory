@@ -19,7 +19,10 @@ class CommissionService
     private const REFERENCE = '/^[A-Za-z0-9][A-Za-z0-9 .\/#:_-]{0,99}\z/';
 
     /** Refund states that hold a payout: the order may still be refunded. */
-    private const OPEN_REFUND = "EXISTS (SELECT 1 FROM refunds r WHERE r.order_id = c.order_id AND r.status IN ('requested', 'approved', 'processing'))";
+    // A failed refund without a gateway refund id may have timed out after Razorpay refunded: hold until the
+    // reconciler settles it or an admin rejects it. A failed one with an id came from a real refund.failed.
+    private const OPEN_REFUND = "EXISTS (SELECT 1 FROM refunds r WHERE r.order_id = c.order_id AND (r.status IN ('requested', 'approved', 'processing')
+        OR (r.status = 'failed' AND r.razorpay_refund_id IS NULL)))";
 
     /** Joined row for format(): commission + order number + partner + open-refund flag. */
     public const SELECT = 'SELECT c.*, o.order_number, p.name AS partner_name, p.referral_code, p.active AS partner_active, '

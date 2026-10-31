@@ -45,6 +45,39 @@ class RazorpayGateway implements Gateway
         return ['id' => $r['id'], 'status' => $r['status']];
     }
 
+    // UNVERIFIED against the real API until the Razorpay test-mode run: GET /v1/refunds/{id} and
+    // GET /v1/payments/{id}/refunds are documented to return refund entities (id, payment_id, amount in paise,
+    // status pending|processed|failed); the list is wrapped in {"items": [...]}. Anything else is a 502.
+    public function fetchRefund(string $refundId): array
+    {
+        $r = self::refundEntity($this->request('GET', '/refunds/' . rawurlencode($refundId)));
+        if ($r === null) {
+            error_log("Razorpay fetch refund {$refundId}: unexpected response shape");
+            throw new ApiException('Payment gateway error', 502, 'gateway_error');
+        }
+        return $r;
+    }
+
+    public function listRefundsForPayment(string $paymentId): array
+    {
+        $items = $this->request('GET', '/payments/' . rawurlencode($paymentId) . '/refunds')['items'] ?? null;
+        $out = is_array($items) ? array_map([self::class, 'refundEntity'], $items) : [null];
+        if (in_array(null, $out, true)) {
+            error_log("Razorpay list refunds for {$paymentId}: unexpected response shape");
+            throw new ApiException('Payment gateway error', 502, 'gateway_error');
+        }
+        return $out;
+    }
+
+    private static function refundEntity(mixed $r): ?array
+    {
+        if (!is_array($r) || !is_string($r['id'] ?? null) || !is_string($r['payment_id'] ?? null)
+            || !is_int($r['amount'] ?? null) || !is_string($r['status'] ?? null)) {
+            return null;
+        }
+        return ['id' => $r['id'], 'payment_id' => $r['payment_id'], 'amount' => $r['amount'], 'status' => $r['status']];
+    }
+
     private function request(string $method, string $path, ?array $body = null): array
     {
         $ch = curl_init(self::BASE . $path);

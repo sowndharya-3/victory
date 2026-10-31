@@ -133,14 +133,16 @@ class WebhookController
             $stmt->execute([$paymentId]);
             $row = $stmt->fetch();
         }
+        // Unknown refund on one of our payments (e.g. refunded in the dashboard) or a different amount (partial):
+        // admin trail only (orders.admin_flag + audit). Access, fulfilment and commission are left alone: policy pending.
         if (!$row) {
             error_log("razorpay webhook: refund.processed for unknown refund (refund_id={$refundId}, payment_id={$paymentId})");
-            return 'ignored';
+            return RefundService::flagExternalUnmatched($paymentId, $refundId, $entity['amount'] ?? null, 'unknown_refund') ? 'flagged' : 'ignored';
         }
         // Full refunds only: a different amount (e.g. a partial refund made in the dashboard) never finalises ours.
         if (($entity['amount'] ?? null) !== Money::toPaise($row['amount'])) {
             error_log("razorpay webhook: refund.processed amount differs from refund {$row['id']} (refund_id={$refundId}, payment_id={$paymentId})");
-            return 'ignored';
+            return RefundService::flagExternalUnmatched($paymentId, $refundId, $entity['amount'] ?? null, 'amount_differs') ? 'flagged' : 'ignored';
         }
         return (new RefundService(GatewayFactory::make()))->finalise((int) $row['id'], $refundId, true) ? 'ok' : 'ignored';
     }

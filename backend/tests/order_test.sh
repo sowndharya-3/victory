@@ -633,11 +633,19 @@ sql "UPDATE refunds SET status='failed', reviewed_by_admin_id=1 WHERE id=$RFH2;"
 post_json "$TOKEN_J" "/api/me/orders/$JH2/refund-request" '{"reason":"asking again"}'; RFH2B=$(id_of "$P")
 check "failed refund (no refund id) + newer requested refund on the same order" "$([ "$PCODE" = "201" ] && [ "$(sql "SELECT CONCAT(status,'|',razorpay_refund_id IS NULL) FROM refunds WHERE id=$RFH2")" = "failed|1" ] && [ "$(sql "SELECT status FROM refunds WHERE id=$RFH2B")" = "requested" ] && echo true || echo false)"
 wh "${EV}_rf3" "$(rf_body "rfnd_ordertest_b$STAMP" "$JH2PAY" 100)"
-check "refund.processed with a different amount -> ignored, refunds unchanged" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ignored"' && [ "$(sql "SELECT GROUP_CONCAT(status ORDER BY id) FROM refunds WHERE order_id=$JH2")" = "failed,requested" ] && [ "$(order_status $JH2)" = "paid" ] && echo true || echo false)"
+check "refund.processed with a different amount -> flagged (admin_flag + audit), refunds unchanged" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"flagged"' && [ "$(sql "SELECT GROUP_CONCAT(status ORDER BY id) FROM refunds WHERE order_id=$JH2")" = "failed,requested" ] && [ "$(order_status $JH2)" = "paid" ] && [ "$(sql "SELECT admin_flag FROM orders WHERE id=$JH2")" = "refund_external_unmatched" ] && [ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE action='refund.external_unmatched' AND entity_type='order' AND entity_id=$JH2")" = "1" ] && echo true || echo false)"
 wh "${EV}_rf4" "$(rf_body "rfnd_ordertest_b$STAMP" "$JH2PAY" 34900)"
 check "refund.processed by payment id -> ok (no 500); the open requested refund refunded with the id, failed one untouched, fulfilment cancelled" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ok"' && [ "$(sql "SELECT CONCAT(status,'|',razorpay_refund_id) FROM refunds WHERE id=$RFH2B")" = "refunded|rfnd_ordertest_b$STAMP" ] && [ "$(sql "SELECT CONCAT(status,'|',razorpay_refund_id IS NULL) FROM refunds WHERE id=$RFH2")" = "failed|1" ] && [ "$(sql "SELECT COUNT(*) FROM refunds WHERE order_id=$JH2 AND status='refunded'")" = "1" ] && [ "$(sql "SELECT CONCAT(status,'|',fulfilment_status) FROM orders WHERE id=$JH2")" = "refunded|cancelled" ] && echo true || echo false)"
 wh "${EV}_rf5" "$(rf_body "rfnd_unknown_$STAMP" "pay_unknown_$STAMP" 100)"
 check "refund.processed for an unknown refund -> ignored, logged (ids only)" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ignored"' && docker compose logs --since 2m php 2>&1 | grep -q "refund.processed for unknown refund (refund_id=rfnd_unknown_$STAMP, payment_id=pay_unknown_$STAMP)" && echo true || echo false)"
+
+# Refund made outside the app (dashboard) on a paid order: admin trail only, nothing revoked or cancelled
+paid_order "$TOKEN_J" "$ADDR2"; JH4=$NID; JH4PAY=$NPAY
+wh "${EV}_rf6" "$(rf_body "rfnd_external_$STAMP" "$JH4PAY" 34900)"; C1=$WCODE; W1B=$W
+wh "${EV}_rf7" "$(rf_body "rfnd_external_$STAMP" "$JH4PAY" 34900)"
+check "external refund.processed on a paid order -> flagged; order paid, fulfilment confirmed, no refund row; again -> ignored" "$([ "$C1" = "200" ] && jh "$W1B" '"status":"flagged"' && jh "$W" '"status":"ignored"' && [ "$(sql "SELECT CONCAT(status,'|',fulfilment_status,'|',admin_flag) FROM orders WHERE id=$JH4")" = "paid|confirmed|refund_external_unmatched" ] && [ "$(sql "SELECT COUNT(*) FROM refunds WHERE order_id=$JH4")" = "0" ] && [ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE action='refund.external_unmatched' AND entity_id=$JH4")" = "1" ] && echo true || echo false)"
+get_json "$ADMIN_TOKEN" "/api/admin/orders/$JH4"
+check "admin order detail shows adminFlag refund_external_unmatched and the audit row" "$([ "$GCODE" = "200" ] && jh "$G" '"adminFlag":"refund_external_unmatched"' && jh "$G" '"action":"refund.external_unmatched"' && echo true || echo false)"
 
 # Admin-opened refund on a shipped hard copy
 paid_order "$TOKEN_J" "$ADDR2"; JH3=$NID

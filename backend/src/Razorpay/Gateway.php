@@ -15,4 +15,13 @@ interface Gateway
 
     /** Full refund of a captured payment. @return array{id:string,status:string} status: processed|pending|failed */
     public function refund(string $razorpayPaymentId, int $amountPaise, string $receipt): array;
+
+    /**
+     * One refund by Razorpay refund id. @return array{id:string,payment_id:string,amount:int,status:string}
+     * status: pending|processed|failed. Throws ApiException 502 on any gateway error.
+     */
+    public function fetchRefund(string $refundId): array;
+
+    /** Every refund of a payment (same shape as fetchRefund). @return list<array{id:string,payment_id:string,amount:int,status:string}> */
+    public function listRefundsForPayment(string $paymentId): array;
 }

@@ -156,7 +156,7 @@ Phone, WhatsApp and UPI are deliberately not unique (families/institutions share
 | POST | /api/admin/partners/:id/toggle-active | admin | Flip `active` → partner. Inactive codes are unknown to validate/checkout; existing orders and commissions are untouched |
 | PUT | /api/admin/partners/:id | admin | Partial `{name?, phone?, whatsapp?, upiId?, gmail?}` (same rules as the application; `upiId` ""/null clears) → partner. Any other key → 400 (`referral_code`/`active` not editable here); gmail already used by another partner → 409 `duplicate_partner` |
 | GET | /api/admin/commissions?status=&partnerId=&page=&perPage= | admin | `{items:[{id,orderId,orderNumber,partner:{id,name,referralCode,active},purchaseType,amount,status,payoutReference,payableAt,paidAt,clawbackDue,refundOpen,reversedAt,createdAt}], page, perPage, total, totals:{pending,payable,paid,reversed,clawbackDue:{count,amount}}}`; totals honour `partnerId` only. Amounts are `"25.00"` strings |
-| POST | /api/admin/commissions/:id/payable | admin | `pending` → `payable` (`payable_at`) → commission. Anything else 400 `invalid_transition` (`reversed` can never be paid). 409 `refund_open` while the order has a requested/approved/processing refund or is no longer `paid` (same hold for `paid`) |
+| POST | /api/admin/commissions/:id/payable | admin | `pending` → `payable` (`payable_at`) → commission. Anything else 400 `invalid_transition` (`reversed` can never be paid). 409 `refund_open` while the order has a requested/approved/processing refund, a `failed` refund with no Razorpay refund id (may have timed out after Razorpay refunded; released once the cron settles it or an admin rejects it), or is no longer `paid` (same hold for `paid`) |
 | POST | /api/admin/commissions/:id/paid | admin | `{payoutReference}` (required, 1–100 of letters, digits, space `. / # : _ -`) ; `payable` → `paid` (`paid_at`) → commission. 400 `validation_error` / `invalid_transition` |
 | GET / PUT | /api/admin/settings/commission | admin | `{digital, hardcopy}` flat ₹ per paid referral order, `"25.00"` strings; PUT needs both, 0–10000 with ≤2 decimals (string or number). Applies to orders paid afterwards only: amounts are snapshotted by `markPaid` |
 | GET / PUT | /api/admin/settings/pricing | admin | `{shippingChargeDigital, shippingChargeHardcopy, gstPercentDigital, gstPercentHardcopy, gstMode}` (U1/U2). PUT is partial: shipping 0–10000 ₹, GST 0–100 %, ≤2 decimals, `gstMode` inclusive/exclusive; unknown keys / empty body 400. Applies to new quotes/orders only |
@@ -187,7 +187,11 @@ the API: `unauthorized` 401, `forbidden` 403 (wrong role), `not_found` 404, `val
    `https://<your-domain>/api/webhooks/razorpay` and active events `payment.captured`,
    `payment.failed`, `refund.processed` and `refund.failed` (other events are accepted and ignored). `refund.processed`
    finalises our refund matched by refund id (or by payment id if the id was never stored, preferring the order's
-   open refund) when the amount is the full refund; anything else is `ignored` and logged (ids only).
+   open refund) when the amount is the full refund. A `refund.processed` for an unknown refund on one of our payments
+   (e.g. refunded in the dashboard) or for a different amount (partial) is `flagged`: one `refund.external_unmatched`
+   audit row (entity `order`, detail `{refundId, paymentId, amountPaise, reason}`) and `orders.admin_flag =
+   'refund_external_unmatched'` unless a flag is already set. It never revokes access, cancels fulfilment or touches
+   commissions (refund policy is on hold: an admin decides). A payment that is not ours is `ignored`; all logged (ids only).
    `refund.failed` moves a `processing` refund to `failed` (approve again retries); nothing else changes.
 2. Enter a webhook secret there and set the same value as `RAZORPAY_WEBHOOK_SECRET` in `backend/.env`.
 3. Requests must carry `X-Razorpay-Signature` (HMAC-SHA256 of the raw body) and `X-Razorpay-Event-Id`
@@ -211,12 +215,28 @@ Razorpay reports captured, via the normal paid path; cancels pending orders
 older than 24 h with no capture (payment `failed`, reason `expired`); re-checks
 `failed`/`cancelled` orders from the last 7 days and fulfils any Razorpay reports
 captured (e.g. a retry succeeded but the webhook was lost; nothing else is changed
-on those orders); and purges `rate_limits` rows older than 2 days. It prints
-`paid=N cancelled=N errors=N purged=N` and exits `0` on success, `2` if any order
-errored (counts still printed; see the log for details), `1` on a fatal error.
+on those orders); settles refunds whose webhook was lost (below); and purges `rate_limits` rows older than 2 days.
+It prints `paid=N cancelled=N errors=N purged=N refunds_finalised=N refunds_failed=N refunds_flagged=N` and exits `0`
+on success, `2` if any order or refund errored (counts still printed; see the log for details), `3` if there were no
+errors but a refund was newly flagged `refund_external_unmatched` (needs an admin), `1` on a fatal error. Alert on any
+non-zero exit.
+
+Refund pass (`OrderReconciler::reconcileRefunds`, at most 30 gateway calls per run, oldest first), only through the
+existing `RefundService::finalise()` / `markFailed()` paths (idempotent, refund row locked first):
+- `processing` refunds older than 10 min: `GET /v1/refunds/{id}`; `processed` for the full amount → finalised,
+  `failed` → `failed` (approve again retries), `pending` → next run.
+- `failed` refunds with no Razorpay refund id (the approve call errored or timed out, possibly after Razorpay refunded),
+  order still `paid`, failed 10 min to 7 days ago: `GET /v1/payments/{id}/refunds`; a `processed` refund for the full
+  amount whose id is not stored on another row → finalised with that id.
+- A `processed` refund for any other amount is never finalised; it is flagged like the webhook case above.
+The real Razorpay calls (`RazorpayGateway::fetchRefund` / `listRefundsForPayment`) are UNVERIFIED until the Razorpay
+test-mode run; tests use the scriptable `FakeGateway`. Refunds made entirely outside the app with no webhook at all are
+not discovered by the cron (no account-wide refund listing yet): reconcile those by hand from the Razorpay dashboard.
 
 An order flagged `admin_flag = amount_mismatch` (captured amount differs from the
-order) stays `pending` and is re-polled every run until an admin resolves it.
+order) stays `pending` and is re-polled every run until an admin resolves it. `admin_flag` values (shown as the
+`adminFlag` badge in the admin order list and detail): `amount_mismatch`, `duplicate_payment`, `refund_external_unmatched`.
+A flag is never overwritten; later events only add audit rows.
 
 Run it every 15 minutes, with `flock -n` so a slow run is never overlapped:
 

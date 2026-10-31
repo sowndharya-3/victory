@@ -99,6 +99,16 @@ class StubGateway implements Gateway
         throw new \LogicException('unused');
     }
 
+    public function fetchRefund(string $refundId): array
+    {
+        throw new \LogicException('unused');
+    }
+
+    public function listRefundsForPayment(string $paymentId): array
+    {
+        throw new \LogicException('unused');
+    }
+
     public function refund(string $razorpayPaymentId, int $amountPaise, string $receipt): array
     {
         $this->calls[] = [$razorpayPaymentId, $amountPaise, $receipt];
@@ -381,6 +391,108 @@ try {
     check('adminOpen with an open customer request approves that same refund', $res['created'] === false && (int) $res['refund']['id'] === $rqid && refundRow($rqid)['status'] === 'refunded');
     check('approve unknown refund -> not_found', str_starts_with(attempt(fn () => $svc->approve(0, $ADMIN, null)), 'not_found|404|'));
 
+    // --- refund reconciliation for lost webhooks (OrderReconciler::reconcileRefunds with a scripted FakeGateway) ---
+    $mkRefund = function (array $o, string $status, ?string $rzpRefundId, int $ageMinutes): int {
+        global $db;
+        q("INSERT INTO refunds (order_id, payment_id, reviewed_by_admin_id, status, reason, amount, razorpay_refund_id, updated_at)
+           SELECT ?, id, 1, ?, 'reconcile test', amount, ?, NOW() - INTERVAL ? MINUTE FROM payments WHERE order_id = ?", [$o['id'], $status, $rzpRefundId, $ageMinutes, $o['id']]);
+        return (int) $db->lastInsertId();
+    };
+    $redeemed = function (array $o): void {
+        AccessCodeService::redeem($o['uid'], (string) AccessCodeService::revealForOwner($o['uid'], $o['id']));
+    };
+    $ent = fn (string $id, array $o, int $amount, string $status) => ['id' => $id, 'payment_id' => $o['pay'], 'amount' => $amount, 'status' => $status];
+    $orderStatus = fn (array $o) => (string) val('SELECT status FROM orders WHERE id = ?', [$o['id']]);
+    $commission = fn (array $o) => (string) val('SELECT status FROM commissions WHERE order_id = ?', [$o['id']]);
+    $fg = new FakeGateway();
+
+    $lost = paidOrder('digital', true);  $redeemed($lost);
+    $lostId = $mkRefund($lost, 'processing', "rfnd_{$tag}_lost", 30);
+    $fg->refunds["rfnd_{$tag}_lost"] = $ent("rfnd_{$tag}_lost", $lost, 4990, 'processed');
+    $gone = paidOrder();
+    $goneId = $mkRefund($gone, 'processing', "rfnd_{$tag}_gone", 30);
+    $fg->refunds["rfnd_{$tag}_gone"] = $ent("rfnd_{$tag}_gone", $gone, 4990, 'failed');
+    $slow = paidOrder();
+    $slowId = $mkRefund($slow, 'processing', "rfnd_{$tag}_slow", 30);
+    $fg->refunds["rfnd_{$tag}_slow"] = $ent("rfnd_{$tag}_slow", $slow, 4990, 'pending');
+    $young = paidOrder();
+    $youngId = $mkRefund($young, 'processing', "rfnd_{$tag}_young", 5);
+    $fg->refunds["rfnd_{$tag}_young"] = $ent("rfnd_{$tag}_young", $young, 4990, 'processed');
+    $tout = paidOrder('digital', true);  $redeemed($tout);
+    $toutId = $mkRefund($tout, 'failed', null, 30);
+    $fg->refunds["rfnd_{$tag}_tout0"] = $ent("rfnd_{$tag}_tout0", $tout, 4990, 'failed');
+    $fg->refunds["rfnd_{$tag}_tout"] = $ent("rfnd_{$tag}_tout", $tout, 4990, 'processed');
+    $part = paidOrder('digital', true);  $redeemed($part);
+    $partId = $mkRefund($part, 'failed', null, 30);
+    $fg->refunds["rfnd_{$tag}_part"] = $ent("rfnd_{$tag}_part", $part, 1000, 'processed');
+    $boomR = paidOrder();
+    $boomId = $mkRefund($boomR, 'processing', "rfnd_{$tag}_boom", 30);
+    $fg->refunds["rfnd_{$tag}_boom"] = new ApiException('Payment gateway error', 502, 'gateway_error');
+    $oldF = paidOrder();
+    $oldFId = $mkRefund($oldF, 'failed', null, 8 * 24 * 60); // outside the 7-day window
+    $fg->refunds["rfnd_{$tag}_oldf"] = $ent("rfnd_{$tag}_oldf", $oldF, 4990, 'processed');
+    $realFail = paidOrder();
+    $realFailId = $mkRefund($realFail, 'failed', "rfnd_{$tag}_realfail", 30); // came from a real refund.failed: not re-checked
+    $fg->refunds["rfnd_{$tag}_realfail2"] = $ent("rfnd_{$tag}_realfail2", $realFail, 4990, 'processed');
+
+    $mine = implode(',', [$lostId, $goneId, $slowId, $youngId, $toutId, $partId, $boomId, $oldFId, $realFailId]);
+    $foreign = (int) val("SELECT COUNT(*) FROM refunds r JOIN payments p ON p.id = r.payment_id JOIN orders o ON o.id = r.order_id
+        WHERE p.razorpay_payment_id IS NOT NULL AND r.updated_at <= NOW() - INTERVAL 10 MINUTE AND r.id NOT IN ($mine)
+          AND (r.status = 'processing' OR (r.status = 'failed' AND r.razorpay_refund_id IS NULL AND o.status = 'paid' AND r.updated_at >= NOW() - INTERVAL 7 DAY))");
+    $res = \App\Orders\OrderReconciler::reconcileRefunds($fg);
+    check('reconcile refunds: finalised 2, failed 1, flagged 1, errors 1 (+ foreign rows the fake cannot answer)', $res === ['finalised' => 2, 'failed' => 1, 'flagged' => 1, 'errors' => 1 + $foreign], json_encode($res) . " foreign=$foreign");
+    check('lost refund.processed healed: refunded, order refunded, access revoked, commission reversed',
+        refundRow($lostId)['status'] === 'refunded' && $orderStatus($lost) === 'refunded' && access($lost['uid'])['revoked_at'] !== null && $commission($lost) === 'reversed');
+    check('processing -> gateway failed: refund failed, order still paid', refundRow($goneId)['status'] === 'failed' && $orderStatus($gone) === 'paid');
+    check('processing -> gateway pending: unchanged', refundRow($slowId)['status'] === 'processing' && $orderStatus($slow) === 'paid');
+    check('processing younger than 10 min: not touched', refundRow($youngId)['status'] === 'processing' && $orderStatus($young) === 'paid');
+    $t = refundRow($toutId);
+    check('timed-out (failed, no id) but processed at Razorpay: finalised with that id, access revoked, commission reversed',
+        $t['status'] === 'refunded' && $t['razorpay_refund_id'] === "rfnd_{$tag}_tout" && $orderStatus($tout) === 'refunded' && access($tout['uid'])['revoked_at'] !== null && $commission($tout) === 'reversed');
+    $p = refundRow($partId);
+    check('partial amount at Razorpay: never finalised; order paid, access live, commission untouched, flagged + audit',
+        $p['status'] === 'failed' && $p['razorpay_refund_id'] === null && $orderStatus($part) === 'paid' && access($part['uid'])['revoked_at'] === null && $commission($part) === 'pending'
+        && val('SELECT admin_flag FROM orders WHERE id = ?', [$part['id']]) === 'refund_external_unmatched'
+        && (int) val("SELECT COUNT(*) FROM audit_logs WHERE action = 'refund.external_unmatched' AND entity_type = 'order' AND entity_id = ?", [$part['id']]) === 1);
+    check('gateway error: refund untouched, counted as error', refundRow($boomId)['status'] === 'processing' && $orderStatus($boomR) === 'paid');
+    check('failed (no id) older than 7 days: not re-checked', refundRow($oldFId)['status'] === 'failed' && $orderStatus($oldF) === 'paid');
+    check('failed with a refund id (real refund.failed): not re-checked', refundRow($realFailId)['status'] === 'failed' && $orderStatus($realFail) === 'paid');
+
+    $before = json_encode(q("SELECT id, status, razorpay_refund_id FROM refunds WHERE id IN ($mine) ORDER BY id")->fetchAll());
+    $res2 = \App\Orders\OrderReconciler::reconcileRefunds($fg);
+    check('replay: nothing new (no finalise/flag), rows identical, one refund.refunded audit each',
+        $res2['finalised'] === 0 && $res2['flagged'] === 0 && $res2['failed'] === 0
+        && json_encode(q("SELECT id, status, razorpay_refund_id FROM refunds WHERE id IN ($mine) ORDER BY id")->fetchAll()) === $before
+        && (int) val("SELECT COUNT(*) FROM audit_logs WHERE action = 'refund.refunded' AND entity_type = 'refund' AND entity_id IN (?, ?)", [$lostId, $toutId]) === 2
+        && (int) val("SELECT COUNT(*) FROM audit_logs WHERE action = 'refund.external_unmatched' AND entity_id = ?", [$part['id']]) === 1, json_encode($res2));
+    $capped = \App\Orders\OrderReconciler::reconcileRefunds($fg, 10, 7, 1);
+    check('call cap: at most maxCalls refunds looked at per run', array_sum($capped) <= 1, json_encode($capped));
+
+    // External (dashboard) refund: admin trail only, never revokes or touches commissions; existing flag kept.
+    $ext = paidOrder('digital', true);  $redeemed($ext);
+    check('external refund on our payment -> flagged once', RefundService::flagExternalUnmatched($ext['pay'], "rfnd_{$tag}_ext", 4990, 'unknown_refund') === true
+        && RefundService::flagExternalUnmatched($ext['pay'], "rfnd_{$tag}_ext", 4990, 'unknown_refund') === false);
+    check('external refund: order paid, access live, commission pending, flag + one audit row',
+        $orderStatus($ext) === 'paid' && access($ext['uid'])['revoked_at'] === null && $commission($ext) === 'pending'
+        && val('SELECT admin_flag FROM orders WHERE id = ?', [$ext['id']]) === 'refund_external_unmatched'
+        && (int) val("SELECT COUNT(*) FROM audit_logs WHERE action = 'refund.external_unmatched' AND entity_id = ?", [$ext['id']]) === 1);
+    $dup = paidOrder();
+    q("UPDATE orders SET admin_flag = 'duplicate_payment' WHERE id = ?", [$dup['id']]);
+    check('external refund on an already-flagged order: audit row, existing flag kept',
+        RefundService::flagExternalUnmatched($dup['pay'], "rfnd_{$tag}_dup", 4990, 'unknown_refund') === true
+        && val('SELECT admin_flag FROM orders WHERE id = ?', [$dup['id']]) === 'duplicate_payment');
+    check('external refund on a payment that is not ours -> false, nothing written',
+        RefundService::flagExternalUnmatched("pay_not_ours_$tag", "rfnd_{$tag}_x", 4990, 'unknown_refund') === false
+        && (int) val("SELECT COUNT(*) FROM audit_logs WHERE action = 'refund.external_unmatched' AND CAST(detail AS CHAR) LIKE ?", ["%rfnd_{$tag}_x%"]) === 0);
+
+    // Payout hold covers a failed refund without a gateway id (may have succeeded); a real refund.failed (id) does not.
+    $hold = paidOrder('digital', true);
+    $holdRf = $mkRefund($hold, 'failed', null, 1);
+    $cid = (int) val('SELECT id FROM commissions WHERE order_id = ?', [$hold['id']]);
+    check('failed refund with NULL refund id holds payout (refund_open 409)', str_starts_with(attempt(fn () => \App\Referral\CommissionService::markPayable($cid, $ADMIN)), 'refund_open|409|'));
+    q('UPDATE refunds SET razorpay_refund_id = ? WHERE id = ?', ["rfnd_{$tag}_holdf", $holdRf]);
+    check('failed refund with a gateway refund id releases the hold', attempt(fn () => \App\Referral\CommissionService::markPayable($cid, $ADMIN)) === 'ok');
+
     // --- no plaintext codes or secrets in refund audit rows ---
     $ids = implode(',', array_map('intval', $userIds));
     check('refund audit detail never holds code_enc/plaintext keys', (int) val("SELECT COUNT(*) FROM audit_logs WHERE entity_type = 'refund' AND (CAST(detail AS CHAR) LIKE '%code_enc%' OR CAST(detail AS CHAR) LIKE '%secret%') AND entity_id IN (SELECT id FROM refunds WHERE order_id IN (SELECT id FROM orders WHERE user_id IN ($ids)))") === 0);
@@ -394,7 +506,8 @@ try {
     $ids = $userIds ? implode(',', array_map('intval', $userIds)) : '0';
     $orderIds = "SELECT id FROM orders WHERE user_id IN ($ids)";
     $db->exec("DELETE FROM audit_logs WHERE (entity_type = 'refund' AND entity_id IN (SELECT id FROM refunds WHERE order_id IN ($orderIds)))
-                 OR user_id IN ($ids) OR (entity_type = 'access_code' AND entity_id IN (SELECT id FROM access_codes WHERE order_id IN ($orderIds)))");
+                 OR user_id IN ($ids) OR (entity_type = 'access_code' AND entity_id IN (SELECT id FROM access_codes WHERE order_id IN ($orderIds)))
+                 OR (entity_type IN ('order', 'commission') AND entity_id IN (SELECT id FROM orders WHERE user_id IN ($ids)))");
     $db->exec("DELETE FROM refunds WHERE order_id IN ($orderIds)");
     $db->exec("DELETE FROM commissions WHERE order_id IN ($orderIds)");
     $db->exec("DELETE FROM access_codes WHERE order_id IN ($orderIds)");

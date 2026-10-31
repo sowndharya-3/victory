@@ -4,6 +4,8 @@ namespace App\Orders;
 
 use App\Database\Db;
 use App\Razorpay\Gateway;
+use App\Refunds\RefundService;
+use App\Support\Money;
 
 /**
  * Cron sweep: fulfils pending orders the gateway reports captured, expires abandoned ones, and re-checks
@@ -73,6 +75,77 @@ class OrderReconciler
             } catch (\Throwable $e) {
                 $result['errors']++;
                 error_log("reconcile: order {$row['id']} failed: " . get_class($e) . ': ' . $e->getMessage());
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * Refunds whose webhook was lost (risk notes 1.3, pass R1). Asks the gateway, then settles only through the
+     * existing RefundService paths (finalise / markFailed: idempotent, refund row locked first):
+     *  - `processing` older than $minAgeMinutes: fetch the refund by id; processed at the full amount -> finalise,
+     *    failed -> markFailed, pending -> leave for the next run.
+     *  - `failed` without a gateway refund id (the approve call errored or timed out, maybe after Razorpay refunded),
+     *    order still paid, failed between $minAgeMinutes and $recheckDays ago: list the payment's refunds; a processed
+     *    refund for the full amount not already stored on another row -> finalise with that id.
+     * A processed refund for another amount is never finalised: it is flagged for an admin (flagExternalUnmatched).
+     * At most $maxCalls gateway calls per run, oldest first.
+     * @return array{finalised:int,failed:int,flagged:int,errors:int}
+     */
+    public static function reconcileRefunds(Gateway $gateway, int $minAgeMinutes = 10, int $recheckDays = 7, int $maxCalls = 30): array
+    {
+        $result = ['finalised' => 0, 'failed' => 0, 'flagged' => 0, 'errors' => 0];
+        // ponytail: oldest first with a hard cap; refunds stuck in Razorpay `pending` are re-polled each run and could
+        // starve newer ones only past $maxCalls of them. Add a next_check_at backoff column if that ever happens.
+        $stmt = Db::connection()->prepare(
+            "SELECT r.id, r.status, r.amount, r.razorpay_refund_id, p.razorpay_payment_id
+               FROM refunds r JOIN payments p ON p.id = r.payment_id JOIN orders o ON o.id = r.order_id
+              WHERE p.razorpay_payment_id IS NOT NULL AND r.updated_at <= NOW() - INTERVAL ? MINUTE
+                AND (r.status = 'processing'
+                     OR (r.status = 'failed' AND r.razorpay_refund_id IS NULL AND o.status = 'paid' AND r.updated_at >= NOW() - INTERVAL ? DAY))
+              ORDER BY r.updated_at, r.id
+              LIMIT " . max(0, $maxCalls)
+        );
+        $stmt->execute([$minAgeMinutes, $recheckDays]);
+        $service = new RefundService($gateway);
+        foreach ($stmt->fetchAll() as $r) {
+            $id = (int) $r['id'];
+            $pay = $r['razorpay_payment_id'];
+            $full = Money::toPaise((string) $r['amount']);
+            try {
+                if ($r['status'] === 'processing' && $r['razorpay_refund_id'] !== null) {
+                    $g = $gateway->fetchRefund($r['razorpay_refund_id']);
+                    if (($g['payment_id'] ?? null) !== $pay) {
+                        throw new \UnexpectedValueException('gateway refund belongs to another payment');
+                    }
+                    if ($g['status'] === 'processed' && $g['amount'] === $full) {
+                        $result['finalised'] += $service->finalise($id, $r['razorpay_refund_id']) ? 1 : 0;
+                    } elseif ($g['status'] === 'processed') {
+                        $result['flagged'] += RefundService::flagExternalUnmatched($pay, $g['id'], $g['amount'], 'amount_differs') ? 1 : 0;
+                    } elseif ($g['status'] === 'failed') {
+                        $result['failed'] += $service->markFailed($id) ? 1 : 0;
+                    }
+                    continue; // pending: next run
+                }
+                foreach ($gateway->listRefundsForPayment($pay) as $g) {
+                    if (($g['status'] ?? null) !== 'processed' || ($g['payment_id'] ?? null) !== $pay) {
+                        continue;
+                    }
+                    if ($g['amount'] !== $full) {
+                        $result['flagged'] += RefundService::flagExternalUnmatched($pay, $g['id'], $g['amount'], 'amount_differs') ? 1 : 0;
+                        continue;
+                    }
+                    $taken = Db::connection()->prepare('SELECT COUNT(*) FROM refunds WHERE razorpay_refund_id = ?');
+                    $taken->execute([$g['id']]);
+                    if ((int) $taken->fetchColumn() === 0) {
+                        // true: money confirmed by the gateway (same meaning as a signed refund.processed).
+                        $result['finalised'] += $service->finalise($id, $g['id'], true) ? 1 : 0;
+                        break;
+                    }
+                }
+            } catch (\Throwable $e) {
+                $result['errors']++;
+                error_log("reconcile: refund {$id} failed: " . get_class($e) . ': ' . $e->getMessage());
             }
         }
         return $result;

@@ -205,6 +205,42 @@ class RefundService
         }
     }
 
+    /**
+     * A gateway refund we cannot match to one of ours at the full amount (made in the Razorpay dashboard, or a
+     * partial/other amount): admin trail only. Writes one `refund.external_unmatched` audit row per gateway refund id
+     * on the order and sets orders.admin_flag = 'refund_external_unmatched' unless a flag is already set. Never
+     * revokes access, cancels fulfilment or touches commissions (policy pending). Idempotent; locks only the order row.
+     * @return bool true when newly recorded; false when already recorded or the payment is not ours
+     */
+    public static function flagExternalUnmatched(string $razorpayPaymentId, string $razorpayRefundId, mixed $amountPaise, string $why): bool
+    {
+        $db = Db::connection();
+        $db->beginTransaction();
+        try {
+            $stmt = $db->prepare('SELECT o.id FROM payments p JOIN orders o ON o.id = p.order_id WHERE p.razorpay_payment_id = ? FOR UPDATE');
+            $stmt->execute([$razorpayPaymentId]);
+            $orderId = $stmt->fetchColumn();
+            $stmt = $db->prepare("SELECT COUNT(*) FROM audit_logs WHERE action = 'refund.external_unmatched' AND entity_type = 'order' AND entity_id = ?
+                                    AND JSON_UNQUOTE(JSON_EXTRACT(detail, '$.refundId')) = ?");
+            $stmt->execute([(int) $orderId, $razorpayRefundId]);
+            if ($orderId === false || (int) $stmt->fetchColumn() > 0) {
+                $db->rollBack();
+                return false;
+            }
+            $db->prepare("INSERT INTO audit_logs (admin_id, action, entity_type, entity_id, detail) VALUES (NULL, 'refund.external_unmatched', 'order', ?, ?)")
+                ->execute([$orderId, json_encode(['refundId' => $razorpayRefundId, 'paymentId' => $razorpayPaymentId, 'amountPaise' => is_int($amountPaise) ? $amountPaise : null, 'reason' => $why])]);
+            $db->prepare("UPDATE orders SET admin_flag = 'refund_external_unmatched' WHERE id = ? AND admin_flag IS NULL")->execute([$orderId]);
+            $db->commit();
+        } catch (\Throwable $e) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $e;
+        }
+        error_log("refund: external/unmatched gateway refund flagged on order {$orderId} (refund_id={$razorpayRefundId}, payment_id={$razorpayPaymentId}, reason={$why})");
+        return true;
+    }
+
     public static function find(int $refundId): array
     {
         $stmt = Db::connection()->prepare('SELECT * FROM refunds WHERE id = ?');
