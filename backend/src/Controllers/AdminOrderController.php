@@ -312,15 +312,24 @@ class AdminOrderController
     /** Trimmed single-line string field, 1..$max chars when present; null when optional and absent/empty. */
     public static function text(array $data, string $key, int $max, bool $required): ?string
     {
-        $v = $data[$key] ?? null;
-        $v = is_string($v) ? trim($v) : $v;
-        if (($v === null || $v === '') && !$required) {
+        $raw = $data[$key] ?? null;
+        $v = is_string($raw) ? self::clean($raw) : null;
+        if (($raw === null || $v === '') && !$required) {
             return null;
         }
-        // \p{Cc}: no control characters (newlines, NUL, ...); an invalid UTF-8 string also fails here.
-        if (!is_string($v) || $v === '' || mb_strlen($v) > $max || preg_match('/\p{Cc}/u', $v) !== 0) {
+        if ($v === null || $v === '' || mb_strlen($v) > $max) {
             throw new ApiException('Validation failed', 400, 'validation_error', [$key => "Required, 1-$max characters"]);
         }
         return $v;
+    }
+
+    /**
+     * Unicode trim (incl. NBSP and other \p{Z} spaces); null for invalid UTF-8 or any control character
+     * (\p{Cc}: NUL, newlines, ANSI escapes, ...). Callers decide whether '' is allowed.
+     */
+    public static function clean(string $v): ?string
+    {
+        $v = preg_replace('/^[\s\p{Z}]+|[\s\p{Z}]+$/u', '', $v); // null on invalid UTF-8
+        return $v === null || preg_match('/\p{Cc}/u', $v) !== 0 ? null : $v;
     }
 }

@@ -24,10 +24,19 @@ class ReferralApplicationController
         'gmail' => ['gmail', 190, true],
     ];
     public const PARTNER_FIELDS = ['name', 'phone', 'whatsapp', 'upiId', 'gmail'];
+    private const MAX_BODY = 16384;
 
     public function create(): void
     {
-        $row = self::validate(AdminOrderController::body(), array_keys(self::FIELDS), false);
+        // Public endpoint: cap the body before decoding (a real application is well under 2 KB).
+        $in = fopen('php://input', 'rb');
+        $raw = (string) stream_get_contents($in, self::MAX_BODY + 1);
+        fclose($in);
+        if (strlen($raw) > self::MAX_BODY) {
+            throw new ApiException('Request body too large', 413, 'payload_too_large');
+        }
+        $data = json_decode($raw, true);
+        $row = self::validate(is_array($data) ? $data : [], array_keys(self::FIELDS), false);
         // Counted after validation: typo fixes are free, only well-formed submissions use the 5/hour budget.
         // REMOTE_ADDR is nginx's peer address (no X-Forwarded-For trust), so it cannot be spoofed by a header.
         RateLimiter::hit('referral-apply:' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'), 5, 3600);
@@ -70,7 +79,11 @@ class ReferralApplicationController
                 $errors[$key] = 'Must be text';
                 continue;
             }
-            $v = trim((string) $v);
+            $v = AdminOrderController::clean((string) $v);
+            if ($v === null) {
+                $errors[$key] = 'Must be valid text without control characters or line breaks';
+                continue;
+            }
             if ($v === '') {
                 if ($required) {
                     $errors[$key] = 'Required';

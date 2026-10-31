@@ -52,6 +52,7 @@ class AdminReferralController
         $db->beginTransaction();
         try {
             $a = self::lockPending($appId, 'approved');
+            self::gmailFree($a['gmail'], 0);
             $partnerId = null;
             for ($try = 0; $partnerId === null; $try++) {
                 $code = CodeGenerator::partner();
@@ -123,6 +124,9 @@ class AdminReferralController
         $db->beginTransaction();
         try {
             $p = self::lockPartner($partnerId);
+            if (isset($set['gmail'])) {
+                self::gmailFree($set['gmail'], $partnerId);
+            }
             $from = $to = [];
             foreach ($set as $col => $v) {
                 if ($p[$col] !== $v) {
@@ -156,6 +160,16 @@ class AdminReferralController
             throw new ApiException("Cannot move application from {$a['application_status']} to $to", 400, 'invalid_transition');
         }
         return $a;
+    }
+
+    /** One partner per gmail (it is also the self-referral key). ponytail: no unique index; two racing approvals of different applications could both pass. */
+    private static function gmailFree(string $gmail, int $exceptPartnerId): void
+    {
+        $stmt = Db::connection()->prepare('SELECT 1 FROM referral_partners WHERE gmail = ? AND id <> ? LIMIT 1');
+        $stmt->execute([$gmail, $exceptPartnerId]);
+        if ($stmt->fetchColumn()) {
+            throw new ApiException('Another partner already uses this Gmail', 409, 'duplicate_partner');
+        }
     }
 
     private static function lockPartner(int $partnerId): array

@@ -152,6 +152,29 @@ try {
     q('UPDATE referral_partners SET active = 0 WHERE id = ?', [$partnerId]);
     check('partner deactivation changes no commission row', json_encode(q('SELECT * FROM commissions WHERE referral_partner_id = ? ORDER BY id', [$partnerId])->fetchAll()) === $snap);
     check('earned commission of an inactive partner can still be paid out', attempt(fn () => CommissionService::markPayable($newH, $ADMIN)) === 'ok' && cm($newH)['status'] === 'payable');
+
+    // --- payout held while the order can still be refunded ---
+    $openRefund = function (int $commissionId, string $status): int {
+        global $db;
+        $orderId = (int) cm($commissionId)['order_id'];
+        q("INSERT INTO refunds (order_id, payment_id, status, reason, amount) SELECT ?, id, ?, 'test', amount FROM payments WHERE order_id = ?", [$orderId, $status, $orderId]);
+        return (int) $db->lastInsertId();
+    };
+    $held = paidReferralOrder('digital');
+    $rf = $openRefund($held, 'requested');
+    check('open (requested) refund blocks markPayable -> refund_open 409, row unchanged', str_starts_with(attempt(fn () => CommissionService::markPayable($held, $ADMIN)), 'refund_open|409|') && cm($held)['status'] === 'pending' && cm($held)['payable_at'] === null);
+    check('commission row reports refundOpen', CommissionService::find($held)['refundOpen'] === true);
+    q("UPDATE refunds SET status = 'rejected' WHERE id = ?", [$rf]);
+    check('after the refund is rejected markPayable works; refundOpen false', attempt(fn () => CommissionService::markPayable($held, $ADMIN)) === 'ok' && CommissionService::find($held)['refundOpen'] === false);
+    foreach (['approved', 'processing'] as $st) {
+        $rf = $openRefund($held, $st);
+        check("$st refund blocks markPaid -> refund_open 409", str_starts_with(attempt(fn () => CommissionService::markPaid($held, $ADMIN, 'UPI-9')), 'refund_open|409|') && cm($held)['status'] === 'payable');
+        q("UPDATE refunds SET status = 'failed' WHERE id = ?", [$rf]);
+    }
+    check('after the refund failed markPaid works', attempt(fn () => CommissionService::markPaid($held, $ADMIN, 'UPI-9')) === 'ok' && cm($held)['status'] === 'paid');
+    $gone = paidReferralOrder('hardcopy');
+    q("UPDATE orders SET status = 'refunded' WHERE id = ?", [cm($gone)['order_id']]);
+    check('order no longer paid blocks markPayable -> refund_open', str_starts_with(attempt(fn () => CommissionService::markPayable($gone, $ADMIN)), 'refund_open|409|'));
 } catch (\Throwable $e) {
     echo 'FAIL: unexpected ' . get_class($e) . ': ' . $e->getMessage() . "\n";
     $failures++;
@@ -166,6 +189,7 @@ try {
     $ids = $userIds ? implode(',', array_map('intval', $userIds)) : '0';
     $orderIds = "SELECT id FROM orders WHERE user_id IN ($ids)";
     $db->exec("DELETE FROM audit_logs WHERE user_id IN ($ids) OR (entity_type = 'access_code' AND entity_id IN (SELECT id FROM access_codes WHERE order_id IN ($orderIds)))");
+    $db->exec("DELETE FROM refunds WHERE order_id IN ($orderIds)");
     $db->exec("DELETE FROM commissions WHERE order_id IN ($orderIds)");
     $db->exec("DELETE FROM access_codes WHERE order_id IN ($orderIds)");
     $db->exec("DELETE FROM payments WHERE order_id IN ($orderIds)");

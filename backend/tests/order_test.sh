@@ -69,7 +69,7 @@ cleanup() {
   # Section 10: settings back to their prior values, its audit rows, applications and the partners approved from them.
   [ -n "${SAVED_SQL:-}" ] && sql "$SAVED_SQL"
   [ -n "${AUDIT0:-}" ] && sql "DELETE FROM audit_logs WHERE id > $AUDIT0 AND entity_type IN ('settings','referral_application','referral_partner','commission');"
-  sql "DELETE FROM referral_partners WHERE application_id IN (SELECT id FROM referral_applications WHERE gmail LIKE 'reftest-%@example.com');
+  sql "DELETE FROM referral_partners WHERE gmail LIKE 'reftest-%@example.com' OR application_id IN (SELECT id FROM referral_applications WHERE gmail LIKE 'reftest-%@example.com');
        DELETE FROM referral_applications WHERE gmail LIKE 'reftest-%@example.com';
        DELETE FROM rate_limits WHERE bucket LIKE 'referral-apply:%';"
 }
@@ -927,7 +927,15 @@ check "application: bad status/phone/whatsapp/gmail/upiId each named" "$([ "$ACO
 app_post "$(app_json "$RG-long@example.com" "$(printf 'N%.0s' $(seq 1 151))")"; L1=$ACODE; L1B=$A
 app_post '["x"]'
 check "application: 151-char name -> fields.name; non-object body -> 400; nothing stored" "$([ "$L1" = "400" ] && jh "$L1B" '"fields":\{"name"' && [ "$ACODE" = "400" ] && [ "$(apps_of)" = "0" ] && echo true || echo false)"
-app_post "$(app_json "$RG-1@Example.com")"; A1=$(jget "$A" id)
+CC=""
+for n in 'Ref\u0000Test' 'Ref\nTest' '\u001b[31mRef' 'Ref\u007fTest'; do app_post "$(app_json "$RG-cc@example.com" "$n")"; CC="$CC$ACODE$(jh "$A" '"fields":\{"name"' && echo y) "; done
+check "application: NUL / newline / ANSI escape / DEL in name -> 400 fields.name" "$([ "$CC" = "400y 400y 400y 400y " ] && echo true || echo false)"
+app_post "$(app_json "$RG-cc@example.com" '\u00a0\u2003')"; S1="$ACODE $(jh "$A" '"name":"Required"' && echo y)"
+app_post "{\"name\":\"Ref\",\"status\":\"Faculty\",\"phone\":\"9876543210\",\"whatsapp\":\"9876543210\",\"gmail\":\"$RG-cc@example.com\",\"district\":\"Madurai\\r\\nX\"}"; S2="$ACODE $(jh "$A" '"district":' && echo y)"
+app_post "$(app_json "$RG-cc@example.com" "$(printf 'Ref\xff\xfeTest')")"; S3=$ACODE
+app_post "$(app_json "$RG-cc@example.com" "$(printf 'N%.0s' $(seq 1 17000))")"
+check "application: NBSP-only name Required; CRLF in district; invalid UTF-8 400; 17 KB body 413; nothing stored" "$([ "$S1" = "400 y" ] && [ "$S2" = "400 y" ] && [ "$S3" = "400" ] && [ "$ACODE" = "413" ] && jh "$A" '"code":"payload_too_large"' && [ "$(apps_of)" = "0" ] && echo true || echo false)"
+app_post "$(app_json "$RG-1@Example.com" '  Ref Test\u00a0 ')"; A1=$(jget "$A" id)
 check "application: valid -> 201 pending; phone normalised, gmail lowercased" "$([ "$ACODE" = "201" ] && jh "$A" '"applicationStatus":"pending"' && [ "$(sql "SELECT CONCAT_WS('|',phone,whatsapp,gmail,upi_id,status,application_status) FROM referral_applications WHERE id=${A1:-0}")" = "9876543210|9876543211|$RG-1@example.com|reftest@okaxis|Faculty|pending" ] && echo true || echo false)"
 app_post "$(app_json "$RG-2@example.com")"; A2=$(jget "$A" id); A2CODE=$ACODE
 app_post "$(app_json "$RG-1@EXAMPLE.com")"
@@ -990,6 +998,15 @@ put_json "$ADMIN_TOKEN" "/api/admin/partners/$PID1" '{"upiId":"newpay@okicici","
 check "edit partner: bad values / unknown fields 400; valid edit 200, code + active unchanged" "$([ "$S1" = "400 y" ] && [ "$S2" = "400 y" ] && [ "$UCODE" = "200" ] && jh "$U" '"upiId":"newpay@okicici"' && [ "$(sql "SELECT CONCAT_WS('|',whatsapp,upi_id,referral_code,active) FROM referral_partners WHERE id=$PID1")" = "9123456789|newpay@okicici|$CODE1|1" ] && echo true || echo false)"
 put_json "$ADMIN_TOKEN" "/api/admin/partners/999999999" '{"upiId":"a1@okaxis"}'
 check "edit unknown partner -> 404" "$([ "$UCODE" = "404" ] && echo true || echo false)"
+put_json "$ADMIN_TOKEN" "/api/admin/partners/$PID1" '{"name":"Evil\u001b[2J"}'; S1="$UCODE $(jh "$U" '"fields":\{"name"' && echo y)"
+put_json "$ADMIN_TOKEN" "/api/admin/partners/$PID1" '{"name":"\u00a0"}'; S2=$UCODE
+put_json "$ADMIN_TOKEN" "/api/admin/partners/$PID1" "{\"gmail\":\"$(echo "$EMAIL_A" | tr a-z A-Z)\"}"   # VTP-TEST01 holds EMAIL_A since section 3
+check "edit partner: control chars / NBSP-only name 400; gmail of another partner 409 duplicate_partner; row unchanged" "$([ "$S1" = "400 y" ] && [ "$S2" = "400" ] && [ "$UCODE" = "409" ] && jh "$U" '"code":"duplicate_partner"' && [ "$(sql "SELECT CONCAT_WS('|',name,gmail) FROM referral_partners WHERE id=$PID1")" = "Ref Test|$RG-1@example.com" ] && echo true || echo false)"
+sql "DELETE FROM rate_limits WHERE bucket LIKE 'referral-apply:%';
+     INSERT INTO referral_partners (name, phone, whatsapp, gmail, referral_code, active) VALUES ('Existing','9876543210','9876543210','$RG-3@example.com','VTP-TEST03',0);"
+app_post "$(app_json "$RG-3@example.com")"; A3=$(jget "$A" id)
+post_json "$ADMIN_TOKEN" "/api/admin/referrals/$A3/approve" '{}'
+check "approve when a partner already has that gmail -> 409 duplicate_partner, application stays pending" "$([ "$PCODE" = "409" ] && jh "$P" '"code":"duplicate_partner"' && [ "$(sql "SELECT CONCAT(application_status,(SELECT COUNT(*) FROM referral_partners WHERE gmail='$RG-3@example.com')) FROM referral_applications WHERE id=${A3:-0}")" = "pending1" ] && echo true || echo false)"
 
 # Commissions: list, transitions
 C1=$(sql "SELECT id FROM commissions WHERE order_id=$PO1"); C2=$(sql "SELECT id FROM commissions WHERE order_id=$QO")
@@ -1002,8 +1019,17 @@ get_json "$ADMIN_TOKEN" "/api/admin/commissions?status=payable&partnerId=$PID1"
 check "commissions list: bad status / partnerId 400; status filter applies" "$([ "$S1" = "400" ] && [ "$S2" = "400" ] && [ "$GCODE" = "200" ] && jh "$G" '"total":0' && echo true || echo false)"
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":"UPI-1"}'
 check "markPaid on pending -> 400 invalid_transition" "$([ "$PCODE" = "400" ] && jh "$P" '"code":"invalid_transition"' && echo true || echo false)"
+post_json "$TOKEN_P" "/api/me/orders/$PO1/refund-request" '{"reason":"hold test"}'; RFP=$(id_of "$P")
+post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/payable" ''; S1="$PCODE $(jh "$P" '"code":"refund_open"' && echo y)"
+get_json "$ADMIN_TOKEN" "/api/admin/commissions?partnerId=$PID1"
+check "open refund request: payable -> 409 refund_open, row shows refundOpen true, still pending" "$([ -n "$RFP" ] && [ "$S1" = "409 y" ] && jh "$G" "\"id\":$C1,[^{]*\\{[^}]*\\},[^}]*\"refundOpen\":true" && [ "$(sql "SELECT status FROM commissions WHERE id=$C1")" = "pending" ] && echo true || echo false)"
+post_json "$ADMIN_TOKEN" "/api/admin/refunds/$RFP/reject" '{"note":"Not eligible"}'
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/payable" ''
-check "markPayable -> 200 payable, payable_at set" "$([ "$PCODE" = "200" ] && jh "$P" '"status":"payable"' && [ "$(sql "SELECT payable_at IS NOT NULL FROM commissions WHERE id=$C1")" = "1" ] && echo true || echo false)"
+check "after the refund is rejected: markPayable -> 200 payable, payable_at set, refundOpen false" "$([ "$PCODE" = "200" ] && jh "$P" '"status":"payable"' && jh "$P" '"refundOpen":false' && [ "$(sql "SELECT payable_at IS NOT NULL FROM commissions WHERE id=$C1")" = "1" ] && echo true || echo false)"
+post_json "$TOKEN_P" "/api/me/orders/$PO1/refund-request" '{"reason":"hold test 2"}'; RFP=$(id_of "$P")
+post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":"UPI-77881"}'; S1="$PCODE $(jh "$P" '"code":"refund_open"' && echo y)"
+post_json "$ADMIN_TOKEN" "/api/admin/refunds/$RFP/reject" '{"note":"Not eligible"}'
+check "open refund request: paid -> 409 refund_open, stays payable" "$([ -n "$RFP" ] && [ "$S1" = "409 y" ] && [ "$(sql "SELECT status FROM commissions WHERE id=$C1")" = "payable" ] && echo true || echo false)"
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{}'; S1="$PCODE $(jh "$P" '"fields":\{"payoutReference"' && echo y)"
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":"a\nb"}'; S2=$PCODE
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":" UPI-77881 "}'
