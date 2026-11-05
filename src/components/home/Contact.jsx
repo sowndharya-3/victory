@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { sendContact } from '../../api/contact'
 
 const SERVICE_OPTIONS = [
   { value: 'distance-education', label: 'Distance Education Admission' },
@@ -26,24 +27,79 @@ const INITIAL_FORM = {
   facilitator: 'No',
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const PHONE_RE = /^[0-9+ ]{7,20}$/
+
+// Mirrors the server rules: name 2-100, valid email, phone 7-20 digits/+/space, message 10-5000.
+function buildMessage(form) {
+  return [
+    form.details.trim(),
+    form.counselingTime && `Preferred counselling time: ${form.counselingTime}`,
+    `Willing to be a Service Facilitator: ${form.facilitator}`,
+  ].filter(Boolean).join('\n')
+}
+
+function validate(form, message) {
+  const errors = {}
+  const name = form.name.trim()
+  if (name.length < 2 || name.length > 100) errors.name = 'Enter your name (2 to 100 characters).'
+  if (!EMAIL_RE.test(form.email.trim())) errors.email = 'Enter a valid email address.'
+  if (!PHONE_RE.test(form.phone.trim())) errors.phone = 'Enter a valid phone number (7 to 20 digits).'
+  if (!form.service) errors.service = 'Select a service.'
+  if (message.length < 10 || message.length > 5000) errors.details = 'Details must be 10 to 5000 characters.'
+  return errors
+}
+
 function Contact() {
   const [form, setForm] = useState(INITIAL_FORM)
-  const [submitted, setSubmitted] = useState(false)
-  const [error, setError] = useState(false)
+  const [website, setWebsite] = useState('') // honeypot: real users never fill it
+  const [fieldErrors, setFieldErrors] = useState({})
+  const [status, setStatus] = useState('idle') // idle | sending | success | error
+  const [errorText, setErrorText] = useState('')
 
   const update = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }))
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!form.name || !form.phone || !form.email || !form.service) {
-      setError(true)
-      setSubmitted(false)
+    if (status === 'sending') return
+    const message = buildMessage(form)
+    const errors = validate(form, message)
+    setFieldErrors(errors)
+    if (Object.keys(errors).length) {
+      setStatus('error')
+      setErrorText('Please correct the highlighted fields.')
       return
     }
-    setError(false)
-    setSubmitted(true)
-    setForm(INITIAL_FORM)
+    setStatus('sending')
+    setErrorText('')
+    try {
+      await sendContact({
+        name: form.name.trim(),
+        email: form.email.trim(),
+        phone: form.phone.trim(),
+        subject: SERVICE_OPTIONS.find((o) => o.value === form.service)?.label,
+        message,
+        website,
+      })
+      setForm(INITIAL_FORM)
+      setStatus('success')
+    } catch (err) {
+      setStatus('error')
+      if (err.status === 400 && err.fields) {
+        // Server field names: name | email | phone | message (message is built from the details box).
+        const { message: m, ...rest } = err.fields
+        setFieldErrors({ ...rest, ...(m && { details: m }) })
+        setErrorText('Please correct the highlighted fields.')
+      } else if (err.status === 429) {
+        setErrorText(`Too many attempts. Please wait ${err.retryAfter ? `${err.retryAfter} seconds ` : 'a while '}and try again.`)
+      } else {
+        setErrorText('Could not send your enquiry. Please try again or email us directly at info@victorytoday.edu.')
+      }
+    }
   }
+
+  const fieldError = (f) => fieldErrors[f] && <small role="alert" className="form-error">{fieldErrors[f]}</small>
+  const sending = status === 'sending'
 
   return (
     <section className="contact-section" id="contact">
@@ -57,32 +113,38 @@ function Contact() {
           <div className="contact-form slide-in-left">
             <h3>Enquiry Form</h3>
 
-            {submitted && (
-              <div className="form-success">
-                <i className="fas fa-check-circle"></i> Thank you! Your enquiry has been submitted successfully. We will contact you shortly.
+            {status === 'success' && (
+              <div className="form-success" role="status">
+                <i className="fas fa-check-circle"></i> Your enquiry has been sent.
               </div>
             )}
 
-            {error && (
-              <div className="form-error">
-                <i className="fas fa-exclamation-circle"></i> Please fill all required fields.
+            {status === 'error' && (
+              <div className="form-error" role="alert">
+                <i className="fas fa-exclamation-circle"></i> {errorText}
               </div>
             )}
 
             <form onSubmit={handleSubmit} noValidate>
+              <div aria-hidden="true" style={{ position: 'absolute', left: '-10000px', width: 1, height: 1, overflow: 'hidden' }}>
+                <input type="text" name="website" tabIndex={-1} autoComplete="off" value={website} onChange={(e) => setWebsite(e.target.value)} />
+              </div>
               <div className="form-group">
                 <label htmlFor="name">Name:</label>
                 <input type="text" id="name" className="form-control" value={form.name} onChange={update('name')} required />
+                {fieldError('name')}
               </div>
 
               <div className="form-group">
                 <label htmlFor="phone">Phone:</label>
                 <input type="tel" id="phone" className="form-control" value={form.phone} onChange={update('phone')} required />
+                {fieldError('phone')}
               </div>
 
               <div className="form-group">
                 <label htmlFor="email">E-mail:</label>
                 <input type="email" id="email" className="form-control" value={form.email} onChange={update('email')} required />
+                {fieldError('email')}
               </div>
 
               <div className="form-group">
@@ -95,6 +157,7 @@ function Contact() {
                     </option>
                   ))}
                 </select>
+                {fieldError('service')}
               </div>
 
               <div className="form-group">
@@ -106,6 +169,7 @@ function Contact() {
                   value={form.details}
                   onChange={update('details')}
                 ></textarea>
+                {fieldError('details')}
               </div>
 
               <div className="form-group">
@@ -144,8 +208,8 @@ function Contact() {
                 </div>
               </div>
 
-              <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
-                Submit Enquiry
+              <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={sending}>
+                {sending ? 'Sending...' : 'Submit Enquiry'}
               </button>
             </form>
           </div>
