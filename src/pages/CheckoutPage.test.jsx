@@ -52,6 +52,8 @@ function renderAt(path = '/checkout/1') {
 // Pay stays disabled until the server quote has loaded.
 const payButton = async () => {
   const btn = await screen.findByRole('button', { name: /pay with razorpay/i })
+  const ack = screen.getByRole('checkbox', { name: /all purchases are final/i })
+  if (!ack.checked) fireEvent.click(ack)
   await waitFor(() => expect(btn).toBeEnabled())
   return btn
 }
@@ -189,7 +191,7 @@ test('dismissing the modal shows a message and a retry reuses the same order', a
   act(() => rzpOptions.modal.ondismiss())
   expect(await screen.findByText(/payment (was )?cancelled/i)).toBeInTheDocument()
   const btn = screen.getByRole('button', { name: /pay with razorpay/i })
-  expect(btn).toBeEnabled()
+  await waitFor(() => expect(btn).toBeEnabled())
 
   fireEvent.click(btn)
   await waitFor(() => expect(open).toHaveBeenCalledTimes(2))
@@ -211,4 +213,16 @@ test('shows an error and allows retry when Razorpay fails to load', async () => 
   fireEvent.click(await payButton())
   expect(await screen.findByText(/failed to load razorpay/i)).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /pay with razorpay/i })).toBeEnabled()
+})
+
+test('shows the no-refund notice and keeps Pay disabled until acknowledged', async () => {
+  renderAt()
+  const btn = await screen.findByRole('button', { name: /pay with razorpay/i })
+  expect(screen.getAllByRole('link', { name: /cancellation & refund policy/i }).length).toBeGreaterThan(1)
+  const ack = screen.getByRole('checkbox', { name: /all purchases are final/i })
+  expect(btn).toBeDisabled()
+  fireEvent.click(ack)
+  await waitFor(() => expect(btn).toBeEnabled())
+  fireEvent.click(ack)
+  expect(btn).toBeDisabled()
 })

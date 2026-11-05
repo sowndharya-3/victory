@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { fetchBook } from '../api/books'
 import Header from '../components/home/Header'
 import Footer from '../components/home/Footer'
+import NoRefundNotice from '../components/checkout/NoRefundNotice'
 
 function BookDetailPage() {
   const { id } = useParams()
@@ -40,6 +41,7 @@ function BookDetailPage() {
         <p>Type: {book.type}</p>
         <p>Online reading price: ₹{book.onlinePrice}</p>
         <p>Hard copy price: ₹{book.hardCopyPrice}</p>
+        <NoRefundNotice />
         <Link to={`/checkout/${book.id}`} className="btn btn-primary">Purchase</Link>
       </section>
       <Footer />

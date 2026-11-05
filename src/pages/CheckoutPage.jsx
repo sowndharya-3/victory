@@ -10,6 +10,7 @@ import Footer from '../components/home/Footer'
 import PriceBreakdown from '../components/checkout/PriceBreakdown'
 import AddressForm from '../components/checkout/AddressForm'
 import ReferralCodeInput from '../components/checkout/ReferralCodeInput'
+import NoRefundNotice from '../components/checkout/NoRefundNotice'
 
 const EMPTY_ADDRESS = { fullName: '', phone: '', addressLine: '', city: '', district: '', state: '', pincode: '' }
 
@@ -32,6 +33,7 @@ function CheckoutPage() {
   const [referral, setReferral] = useState(() => getStoredReferral())
   const [message, setMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [acknowledged, setAcknowledged] = useState(false)
   // The order created for this form's current contents; reused on retry so we never create a second one.
   const createdRef = useRef(null)
   const busyRef = useRef(false)
@@ -150,8 +152,14 @@ function CheckoutPage() {
 
           {quote && <PriceBreakdown quote={quote} />}
 
+          <NoRefundNotice />
+          <label>
+            <input type="checkbox" checked={acknowledged} onChange={e => setAcknowledged(e.target.checked)} />
+            I understand all purchases are final and have read the Cancellation &amp; Refund Policy.
+          </label>
+
           <p aria-live="polite" className="form-error">{message}</p>
-          <button type="submit" className="btn btn-primary" disabled={submitting || !quote}>Pay with Razorpay</button>
+          <button type="submit" className="btn btn-primary" disabled={submitting || !quote || !acknowledged}>Pay with Razorpay</button>
         </form>
       </section>
       <Footer />
