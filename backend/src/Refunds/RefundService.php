@@ -23,20 +23,7 @@ class RefundService
     {
     }
 
-    /** Customer request on their own paid order; returns the existing open refund instead of a duplicate. @return array{refund:array,created:bool} */
-    public function request(int $userId, int $orderId, string $reason): array
-    {
-        $reason = self::text($reason, 'reason');
-        $stmt = Db::connection()->prepare('SELECT id, status FROM orders WHERE id = ? AND user_id = ?');
-        $stmt->execute([$orderId, $userId]);
-        $order = $stmt->fetch();
-        if (!$order) {
-            throw new ApiException('Order not found', 404, 'not_found');
-        }
-        return $this->open($order, $reason, $userId, null);
-    }
-
-    /** Admin opens a refund (starts `approved`) and processes it; an open customer request is approved instead. @return array{refund:array,created:bool} */
+    /** Admin opens a refund (starts `approved`) and processes it; an open (legacy) request is approved instead. Customers cannot request refunds (owner decision: exceptions only, handled by an admin). @return array{refund:array,created:bool} */
     public function adminOpen(int $orderId, int $adminId, string $reason): array
     {
         $reason = self::text($reason, 'reason');
@@ -46,7 +33,7 @@ class RefundService
         if (!$order) {
             throw new ApiException('Order not found', 404, 'not_found');
         }
-        $res = $this->open($order, $reason, null, $adminId);
+        $res = $this->open($order, $reason, $adminId);
         if ($res['created']) {
             self::audit($adminId, 'refund.admin_open', (int) $res['refund']['id'], ['orderId' => $orderId]);
         }
@@ -300,7 +287,7 @@ class RefundService
     }
 
     /** @return array{refund:array,created:bool} */
-    private function open(array $order, string $reason, ?int $userId, ?int $adminId, bool $retry = true): array
+    private function open(array $order, string $reason, int $adminId, bool $retry = true): array
     {
         $existing = self::openFor((int) $order['id']);
         if ($existing) {
@@ -318,12 +305,12 @@ class RefundService
         }
         try {
             $db->prepare('INSERT INTO refunds (order_id, payment_id, requested_by_user_id, reviewed_by_admin_id, status, reason, amount) VALUES (?, ?, ?, ?, ?, ?, ?)')
-                ->execute([$order['id'], $pay['id'], $userId, $adminId, $adminId === null ? 'requested' : 'approved', $reason, $pay['amount']]);
+                ->execute([$order['id'], $pay['id'], null, $adminId, 'approved', $reason, $pay['amount']]);
         } catch (PDOException $e) {
             // InnoDB may pick a racing INSERT on uq_open_refund as deadlock victim (40001) instead of reporting
             // a duplicate; the statement was rolled back, so retry once (it then sees the row or gets 23000).
             if ((string) $e->getCode() === '40001' && $retry) {
-                return $this->open($order, $reason, $userId, $adminId, false);
+                return $this->open($order, $reason, $adminId, false);
             }
             // uq_open_refund: a concurrent request won the race; hand back that one.
             if ((string) $e->getCode() !== '23000' || !($existing = self::openFor((int) $order['id']))) {

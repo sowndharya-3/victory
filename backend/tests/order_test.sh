@@ -533,6 +533,7 @@ paid_order() { # $1 token $2 json -> NID, NRZP, NPAY (paid via verify)
   verify "$1" "$NID" "$NRZP" "$NPAY" "$(sign "$NRZP" "$NPAY")"
 }
 rf_body() { echo "{\"event\":\"refund.processed\",\"payload\":{\"refund\":{\"entity\":{\"id\":\"$1\",\"payment_id\":\"$2\",\"amount\":$3,\"status\":\"processed\"}}}}"; }
+seed_request() { sql "INSERT INTO refunds (order_id, payment_id, requested_by_user_id, status, reason, amount) SELECT o.id, p.id, o.user_id, 'requested', 'legacy request', p.amount FROM orders o JOIN payments p ON p.order_id = o.id WHERE o.id=$1; SELECT LAST_INSERT_ID();"; }
 id_of() { echo "$1" | grep -o '"refund":{"id":[0-9]*' | grep -o '[0-9]*$'; }
 sql "DELETE FROM rate_limits WHERE bucket LIKE 'code-redeem-%' OR bucket LIKE 'code-reissue:%';"
 read -r TOKEN_J UID_J <<<"$(register "ordertest-j-$STAMP@example.com")"
@@ -544,21 +545,13 @@ get_json "$TOKEN_J" "/api/me/orders/$JD/access-code"; JCODE=$(code_of "$G")
 post_json "$TOKEN_J" "/api/me/redeem" "{\"code\":\"$JCODE\"}"
 check "section 7: code redeemed, access active" "$([ "$PCODE" = "200" ] && [ "$(sql "SELECT revoked_at IS NULL FROM book_access WHERE user_id=$UID_J AND book_id=$BOOK_ID")" = "1" ] && echo true || echo false)"
 
+# Customers cannot request refunds (owner decision A): the route is gone. A legacy `requested` row is seeded by SQL.
 RQ="/api/me/orders/$JD/refund-request"
-post_json "$TOKEN_J" "$RQ" '{}'
-check "refund request without reason -> 400 fields.reason" "$([ "$PCODE" = "400" ] && jh "$P" '"code":"validation_error"' && jh "$P" '"fields":\{"reason"' && echo true || echo false)"
-post_json "$TOKEN_J" "$RQ" '{"reason":5}'; C1=$PCODE
-post_json "$TOKEN_J" "$RQ" "{\"reason\":\"$(printf 'x%.0s' $(seq 1 501))\"}"
-check "non-string or 501-char reason -> 400" "$([ "$C1" = "400" ] && [ "$PCODE" = "400" ] && echo true || echo false)"
-post_json "" "$RQ" '{"reason":"x"}'; C1=$PCODE
-post_json "$ADMIN_TOKEN" "$RQ" '{"reason":"x"}'; C2=$PCODE
-post_json "$TOKEN_K" "$RQ" '{"reason":"x"}'
-check "refund request: no token 401, admin 403, other customer 404" "$([ "$C1" = "401" ] && [ "$C2" = "403" ] && [ "$PCODE" = "404" ] && echo true || echo false)"
-check "rejected requests wrote no refund rows" "$([ "$(sql "SELECT COUNT(*) FROM refunds WHERE order_id=$JD")" = "0" ] && echo true || echo false)"
-post_json "$TOKEN_J" "$RQ" '{"reason":"  Bought by mistake  "}'; RF1=$(id_of "$P")
-check "refund request -> 201 requested, amount from payment" "$([ "$PCODE" = "201" ] && jh "$P" "^\{\"refund\":\{\"id\":$RF1,\"orderId\":$JD,\"status\":\"requested\",\"reason\":\"Bought by mistake\",\"amount\":199(\.0)?,\"createdAt\":\"[0-9][^\"]*\",\"adminNote\":null\}\}$" && echo true || echo false)"
-post_json "$TOKEN_J" "$RQ" '{"reason":"again"}'
-check "duplicate request -> 200 same refund, one row" "$([ "$PCODE" = "200" ] && [ "$(id_of "$P")" = "$RF1" ] && [ "$(sql "SELECT COUNT(*) FROM refunds WHERE order_id=$JD")" = "1" ] && echo true || echo false)"
+post_json "$TOKEN_J" "$RQ" '{"reason":"Bought by mistake"}'; C1=$PCODE
+post_json "" "$RQ" '{"reason":"x"}'; C2=$PCODE
+post_json "$ADMIN_TOKEN" "$RQ" '{"reason":"x"}'
+check "customer refund-request route removed: owner/anonymous/admin all 404, no refund row written" "$([ "$C1" = "404" ] && [ "$C2" = "404" ] && [ "$PCODE" = "404" ] && [ "$(sql "SELECT COUNT(*) FROM refunds WHERE order_id=$JD")" = "0" ] && echo true || echo false)"
+RF1=$(seed_request "$JD")
 get_json "$TOKEN_J" "/api/me/refunds"; G1=$G; C1=$GCODE
 get_json "$TOKEN_K" "/api/me/refunds"; C2=$GCODE; G2=$G
 get_json "$ADMIN_TOKEN" "/api/me/refunds"
@@ -596,8 +589,6 @@ get_json "$TOKEN_J" "/api/me/refunds"
 check "customer refund list: refunded, internal admin note hidden" "$(jh "$G" "\"id\":$RF1,[^}]*\"status\":\"refunded\"" && jh "$G" '"adminNote":null' && ! echo "$G" | grep -q 'internal' && echo true || echo false)"
 post_json "$ADMIN_TOKEN" "/api/admin/refunds/$RF1/approve" '{}'
 check "approve again -> 200 refunded, same razorpay refund id" "$([ "$PCODE" = "200" ] && [ "$(sql "SELECT razorpay_refund_id FROM refunds WHERE id=$RF1")" = "$RZRF" ] && [ "$(sql "SELECT COUNT(*) FROM refunds WHERE order_id=$JD")" = "1" ] && echo true || echo false)"
-post_json "$TOKEN_J" "$RQ" '{"reason":"once more"}'
-check "request on refunded order -> 200 the existing refund" "$([ "$PCODE" = "200" ] && [ "$(id_of "$P")" = "$RF1" ] && echo true || echo false)"
 post_json "$ADMIN_TOKEN" "/api/admin/refunds/$RF1/reject" '{"note":"too late"}'
 check "reject a refunded refund -> 409 invalid_transition" "$([ "$PCODE" = "409" ] && jh "$P" '"code":"invalid_transition"' && echo true || echo false)"
 wh "${EV}_rf1" "$(rf_body "$RZRF" "$JPAY" 19900)"; C1=$WCODE; W1B=$W
@@ -607,7 +598,7 @@ check "webhooks changed nothing: one refund.refunded audit row" "$([ "$(sql "SEL
 
 # Reject: customer sees the admin note on their own rejected refund only
 paid_order "$TOKEN_K" "$DIG"; KD=$NID; KPAY=$NPAY
-post_json "$TOKEN_K" "/api/me/orders/$KD/refund-request" '{"reason":"changed mind"}'; RFK=$(id_of "$P")
+RFK=$(seed_request "$KD")
 post_json "$ADMIN_TOKEN" "/api/admin/refunds/$RFK/reject" '{"note":"Outside the refund window"}'
 check "admin reject -> 200 rejected, order still paid" "$([ "$PCODE" = "200" ] && jh "$P" '"status":"rejected"' && [ "$(order_status $KD)" = "paid" ] && echo true || echo false)"
 get_json "$TOKEN_K" "/api/me/refunds"; G1=$G
@@ -615,8 +606,8 @@ get_json "$TOKEN_J" "/api/me/refunds"
 check "rejected refund shows its note to its owner only" "$(jh "$G1" '"status":"rejected"[^}]*"adminNote":"Outside the refund window"' && ! echo "$G" | grep -q 'Outside' && echo true || echo false)"
 
 # Gateway pending -> processing, finalised by the signed refund.processed webhook
-post_json "$TOKEN_K" "/api/me/orders/$KD/refund-request" '{"reason":"please reconsider"}'; RFK2=$(id_of "$P")
-check "new request after rejection -> 201" "$([ "$PCODE" = "201" ] && [ -n "$RFK2" ] && [ "$RFK2" != "$RFK" ] && echo true || echo false)"
+RFK2=$(seed_request "$KD")
+check "new row after rejection" "$([ -n "$RFK2" ] && [ "$RFK2" != "$RFK" ] && echo true || echo false)"
 sql "UPDATE refunds SET status='processing', reviewed_by_admin_id=1, razorpay_refund_id='rfnd_ordertest_$STAMP' WHERE id=$RFK2;"
 wh "${EV}_rff1" "$(rf_body "rfnd_ordertest_$STAMP" "$KPAY" 19900 | sed 's/refund.processed/refund.failed/; s/"processed"/"failed"/')"
 check "refund.failed (processing) -> ok; refund failed, order paid, code active" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"ok"' && [ "$(sql "SELECT status FROM refunds WHERE id=$RFK2")" = "failed" ] && [ "$(order_status $KD)" = "paid" ] && [ "$(sql "SELECT status FROM access_codes WHERE order_id=$KD ORDER BY id DESC LIMIT 1")" = "active" ] && echo true || echo false)"
@@ -632,11 +623,11 @@ check "replayed refund.processed -> 200 duplicate" "$([ "$WCODE" = "200" ] && jh
 # Fallback by payment id (refund id never stored, e.g. a timed-out call), with an amount guard
 ADDR2="{\"bookId\":$BOOK_ID,\"purchaseType\":\"hardcopy\",\"address\":$ADDR}"
 paid_order "$TOKEN_J" "$ADDR2"; JH2=$NID; JH2PAY=$NPAY
-post_json "$TOKEN_J" "/api/me/orders/$JH2/refund-request" '{"reason":"not needed"}'; RFH2=$(id_of "$P")
+RFH2=$(seed_request "$JH2")
 # Realistic state: the approve timed out (refund failed, no refund id) and the customer has since asked again.
 sql "UPDATE refunds SET status='failed', reviewed_by_admin_id=1 WHERE id=$RFH2;"
-post_json "$TOKEN_J" "/api/me/orders/$JH2/refund-request" '{"reason":"asking again"}'; RFH2B=$(id_of "$P")
-check "failed refund (no refund id) + newer requested refund on the same order" "$([ "$PCODE" = "201" ] && [ "$(sql "SELECT CONCAT(status,'|',razorpay_refund_id IS NULL) FROM refunds WHERE id=$RFH2")" = "failed|1" ] && [ "$(sql "SELECT status FROM refunds WHERE id=$RFH2B")" = "requested" ] && echo true || echo false)"
+RFH2B=$(seed_request "$JH2")
+check "failed refund (no refund id) + newer requested refund on the same order" "$([ "$(sql "SELECT CONCAT(status,'|',razorpay_refund_id IS NULL) FROM refunds WHERE id=$RFH2")" = "failed|1" ] && [ "$(sql "SELECT status FROM refunds WHERE id=$RFH2B")" = "requested" ] && echo true || echo false)"
 wh "${EV}_rf3" "$(rf_body "rfnd_ordertest_b$STAMP" "$JH2PAY" 100)"
 check "refund.processed with a different amount -> flagged (admin_flag + audit), refunds unchanged" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"flagged"' && [ "$(sql "SELECT GROUP_CONCAT(status ORDER BY id) FROM refunds WHERE order_id=$JH2")" = "failed,requested" ] && [ "$(order_status $JH2)" = "paid" ] && [ "$(sql "SELECT admin_flag FROM orders WHERE id=$JH2")" = "refund_external_unmatched" ] && [ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE action='refund.external_unmatched' AND entity_type='order' AND entity_id=$JH2")" = "1" ] && echo true || echo false)"
 wh "${EV}_rf4" "$(rf_body "rfnd_ordertest_b$STAMP" "$JH2PAY" 34900)"
@@ -760,7 +751,7 @@ check "upload PDF -> pageCount 3, page renders; re-upload -> 200, cache cleared,
 sql "DELETE FROM rate_limits WHERE bucket='reader-page:$UID_L';"
 
 # Revoked: refund the book 2 order (finalised by admin approve) -> reader 403
-post_json "$TOKEN_L" "/api/me/orders/$LD/refund-request" '{"reason":"reader test"}'; RFL=$(id_of "$P")
+RFL=$(seed_request "$LD")
 post_json "$ADMIN_TOKEN" "/api/admin/refunds/$RFL/approve" '{}'
 get_json "$TOKEN_L" "/api/books/$RB/access"
 hdr_get "$TOKEN_L" "/api/books/$RB/read/pages/1"
@@ -1099,14 +1090,14 @@ get_json "$ADMIN_TOKEN" "/api/admin/commissions?status=payable&partnerId=$PID1"
 check "commissions list: bad status / partnerId 400; status filter applies" "$([ "$S1" = "400" ] && [ "$S2" = "400" ] && [ "$GCODE" = "200" ] && jh "$G" '"total":0' && echo true || echo false)"
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":"UPI-1"}'
 check "markPaid on pending -> 400 invalid_transition" "$([ "$PCODE" = "400" ] && jh "$P" '"code":"invalid_transition"' && echo true || echo false)"
-post_json "$TOKEN_P" "/api/me/orders/$PO1/refund-request" '{"reason":"hold test"}'; RFP=$(id_of "$P")
+RFP=$(seed_request "$PO1")
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/payable" ''; S1="$PCODE $(jh "$P" '"code":"refund_open"' && echo y)"
 get_json "$ADMIN_TOKEN" "/api/admin/commissions?partnerId=$PID1"
 check "open refund request: payable -> 409 refund_open, row shows refundOpen true, still pending" "$([ -n "$RFP" ] && [ "$S1" = "409 y" ] && jh "$G" "\"id\":$C1,[^{]*\\{[^}]*\\},[^}]*\"refundOpen\":true" && [ "$(sql "SELECT status FROM commissions WHERE id=$C1")" = "pending" ] && echo true || echo false)"
 post_json "$ADMIN_TOKEN" "/api/admin/refunds/$RFP/reject" '{"note":"Not eligible"}'
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/payable" ''
 check "after the refund is rejected: markPayable -> 200 payable, payable_at set, refundOpen false" "$([ "$PCODE" = "200" ] && jh "$P" '"status":"payable"' && jh "$P" '"refundOpen":false' && [ "$(sql "SELECT payable_at IS NOT NULL FROM commissions WHERE id=$C1")" = "1" ] && echo true || echo false)"
-post_json "$TOKEN_P" "/api/me/orders/$PO1/refund-request" '{"reason":"hold test 2"}'; RFP=$(id_of "$P")
+RFP=$(seed_request "$PO1")
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":"UPI-77881"}'; S1="$PCODE $(jh "$P" '"code":"refund_open"' && echo y)"
 post_json "$ADMIN_TOKEN" "/api/admin/refunds/$RFP/reject" '{"note":"Not eligible"}'
 check "open refund request: paid -> 409 refund_open, stays payable" "$([ -n "$RFP" ] && [ "$S1" = "409 y" ] && [ "$(sql "SELECT status FROM commissions WHERE id=$C1")" = "payable" ] && echo true || echo false)"

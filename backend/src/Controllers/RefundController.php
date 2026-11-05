@@ -4,21 +4,9 @@ namespace App\Controllers;
 
 use App\Database\Db;
 use App\Middleware\AuthMiddleware;
-use App\Razorpay\GatewayFactory;
-use App\Refunds\RefundService;
 
 class RefundController
 {
-    public function request(string $id): void
-    {
-        $payload = AuthMiddleware::requireRole(['customer']);
-        $data = json_decode(file_get_contents('php://input'), true);
-        $reason = is_array($data) && is_string($data['reason'] ?? null) ? $data['reason'] : '';
-        $res = (new RefundService(GatewayFactory::make()))->request((int) $payload['sub'], (int) $id, $reason);
-        http_response_code($res['created'] ? 201 : 200);
-        echo json_encode(['refund' => self::format($res['refund'])]);
-    }
-
     public function mine(): void
     {
         $payload = AuthMiddleware::requireRole(['customer']);

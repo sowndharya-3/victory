@@ -64,7 +64,6 @@ $router->get('/api/me/library', [$codes, 'library']);
 $router->get('/api/track/{code}', [new TrackController(), 'show']);
 
 $refunds = new RefundController();
-$router->post('/api/me/orders/{id}/refund-request', [$refunds, 'request']);
 $router->get('/api/me/refunds', [$refunds, 'mine']);
 $adminRefunds = new AdminRefundController();
 $router->get('/api/admin/refunds', [$adminRefunds, 'list']);

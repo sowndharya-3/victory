@@ -1,5 +1,5 @@
 <?php
-// Child process for the concurrent refund-request test: php refund_request.php <userId> <orderId>
+// Child process for the concurrent refund-open test: php refund_request.php <userId (unused)> <orderId>
 require_once __DIR__ . '/../../config/env.php';
 loadEnv(__DIR__ . '/../../.env');
 spl_autoload_register(function (string $c) {
@@ -11,7 +11,7 @@ spl_autoload_register(function (string $c) {
     }
 });
 try {
-    $r = (new \App\Refunds\RefundService(new \App\Razorpay\FakeGateway()))->request((int) $argv[1], (int) $argv[2], 'race test');
+    $r = (new \App\Refunds\RefundService(new \App\Razorpay\FakeGateway()))->adminOpen((int) $argv[2], 1, 'race test');
     echo ($r['created'] ? 'created:' : 'existing:') . $r['refund']['id'];
 } catch (\App\Http\ApiException $e) {
     echo $e->errorCode;

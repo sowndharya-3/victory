@@ -142,8 +142,7 @@ Phone, WhatsApp and UPI are deliberately not unique (families/institutions share
 | POST | /api/me/orders/:id/reissue-code | customer (owner) | revokes the current code (and any access it granted), returns a new `{code}`; 3/day. Only when the current code is active, redeemed by the buyer, or revoked for `customer_request`; otherwise `reissue_requires_admin` 403 (e.g. a gifted code redeemed by someone else, or an admin revoke) |
 | GET | /api/me/library | customer | `{books:[{bookId,title,coverUrl,orderId,purchasedAt,accessStatus}], pendingRedemptions:[{orderId,bookId,title,coverUrl,purchasedAt}]}` |
 | GET | /api/track/:trackingCode | none | hard-copy status `{orderNumber,bookTitle,status,label,updatedAt,courier?,trackingNumber?}`; never address, email or codes; 10/min per IP |
-| POST | /api/me/orders/:id/refund-request | customer (owner) | `{reason}` (trimmed, 1–500 chars) → 201 `{refund}`, or 200 with the existing open/refunded refund (never a duplicate). `refund` = `{id,orderId,status,reason,amount,createdAt,adminNote}` (`adminNote` only when `rejected`). 400 `validation_error` (`fields.reason`), 404 `not_found` (not yours), 409 `not_refundable` (order not paid) |
-| GET | /api/me/refunds | customer | caller's refunds (on their orders), newest first, same shape as above |
+| GET | /api/me/refunds | customer | caller's refunds (on their orders), newest first: `{id,orderId,status,reason,amount,createdAt,adminNote}` (`adminNote` only when `rejected`). Read-only: **customers cannot request refunds** (owner decision: no general refund for purchased books; genuine exceptions - duplicate payment, money deducted but failed, legal cases - are handled by an admin via `POST /api/admin/orders/:id/refund`). The former `POST /api/me/orders/:id/refund-request` is gone (404) |
 | GET | /api/admin/refunds?status= | admin | newest 200 refunds `[{id,orderId,orderNumber,purchaseType,userId,status,reason,adminNote,amount,razorpayRefundId,requestedByUserId,reviewedByAdminId,createdAt,updatedAt}]`; bad `status` → 400 |
 | POST | /api/admin/refunds/:id/approve | admin | `{note?}` → `{refund}` `refunded` (gateway processed) or `processing` (finalised by the `refund.processed` webhook); idempotent once processing/refunded. 404, 409 `invalid_transition` (rejected) / `not_refundable` / `refund_conflict`, 502 `gateway_error` (refund left `failed`; approve again retries) |
 | POST | /api/admin/refunds/:id/reject | admin | `{note}` required (1–500) → `{refund}` `rejected`; 409 `invalid_transition` once processing/refunded |
@@ -176,7 +175,7 @@ Phone, WhatsApp and UPI are deliberately not unique (families/institutions share
 Access codes are stored as HMAC-SHA256 (pepper from `CODE_SECRET`) plus last 4 chars; the plaintext is kept
 AES-256-GCM-encrypted (order id as AAD, so a blob copied to another order won't decrypt) only until redeemed. Rotating `CODE_SECRET` invalidates every unredeemed code.
 
-Refunds are full refunds only, for the captured `payments.amount` (never a client value). States:
+Refunds are exceptional, admin-initiated, full refunds only, for the captured `payments.amount` (never a client value); nothing refunds or revokes access automatically (the webhook/cron only record what an admin already started, or flag unmatched gateway refunds in `orders.admin_flag`). `requested` rows exist only from before customer requests were removed. States:
 `requested` → `approved` → `processing` → `refunded`, or `rejected` / `failed`. One open refund per order is
 enforced by the database (`UNIQUE(order_id, is_open)`). The Razorpay call (`receipt` = `refund_<id>`) runs under
 a row lock on the refund, so two approvals can't both refund. On `refunded` (one transaction): payment and order

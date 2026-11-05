@@ -130,6 +130,18 @@ function attempt(callable $fn): string
     }
 }
 
+/** A legacy customer-requested refund row (the customer request endpoint was removed; old rows may still exist). @return array{refund:array,created:bool} */
+function seedRequest(int $uid, int $orderId, string $reason): array
+{
+    global $db;
+    $open = q('SELECT * FROM refunds WHERE order_id = ? AND is_open = 1', [$orderId])->fetch();
+    if ($open) {
+        return ['refund' => $open, 'created' => false];
+    }
+    q("INSERT INTO refunds (order_id, payment_id, requested_by_user_id, status, reason, amount) SELECT ?, id, ?, 'requested', ?, amount FROM payments WHERE order_id = ? AND status = 'captured'", [$orderId, $uid, $reason, $orderId]);
+    return ['refund' => refundRow((int) $db->lastInsertId()), 'created' => true];
+}
+
 function refundRow(int $id): array
 {
     return q('SELECT * FROM refunds WHERE id = ?', [$id])->fetch();
@@ -167,25 +179,13 @@ try {
     $fr = (new FakeGateway())->refund('pay_x', 100, 'refund_1');
     check('FakeGateway::refund -> rfnd_fake_<hex>, processed', preg_match('/^rfnd_fake_[0-9a-f]+$/', $fr['id']) === 1 && $fr['status'] === 'processed');
 
-    // --- request validation and ownership ---
+    // --- customer refund requests are gone: only legacy `requested` rows (seeded directly) can exist ---
     $d = paidOrder();
-    check('request: empty reason -> validation_error fields.reason', str_starts_with(attempt(fn () => $svc->request($d['uid'], $d['id'], '')), 'validation_error|400|{"reason"'));
-    check('request: whitespace-only reason -> validation_error', str_starts_with(attempt(fn () => $svc->request($d['uid'], $d['id'], "  \n ")), 'validation_error|400|{"reason"'));
-    check('request: 501-char reason -> validation_error', str_starts_with(attempt(fn () => $svc->request($d['uid'], $d['id'], str_repeat('x', 501))), 'validation_error|400|{"reason"'));
-    check('request: 500 Tamil chars accepted length-wise (mb)', attempt(fn () => $svc->request($d['uid'], $d['id'], str_repeat('அ', 500))) === 'ok');
-    q('DELETE FROM refunds WHERE order_id = ?', [$d['id']]);
-    $stranger = mkUser();
-    check("request on someone else's order -> not_found 404", str_starts_with(attempt(fn () => $svc->request($stranger, $d['id'], 'mine?')), 'not_found|404|'));
-    $unpaid = paidOrder('digital', false, false);
-    check('request on an unpaid order -> not_refundable 409', str_starts_with(attempt(fn () => $svc->request($unpaid['uid'], $unpaid['id'], 'please')), 'not_refundable|409|'));
-    check('no refund rows written by rejected requests', (int) val('SELECT COUNT(*) FROM refunds WHERE order_id IN (?, ?)', [$d['id'], $unpaid['id']]) === 0);
-
-    $r1 = $svc->request($d['uid'], $d['id'], '  changed my mind  ');
+    $r1 = seedRequest($d['uid'], $d['id'], 'changed my mind');
     $row = refundRow((int) $r1['refund']['id']);
-    check('request -> created, status requested, reason trimmed, requested_by set', $r1['created'] === true && $row['status'] === 'requested' && $row['reason'] === 'changed my mind' && (int) $row['requested_by_user_id'] === $d['uid'] && $row['reviewed_by_admin_id'] === null);
-    check('request amount is the captured payment amount (49.90), payment_id linked', $row['amount'] === '49.90' && (int) $row['payment_id'] === (int) val('SELECT id FROM payments WHERE order_id = ?', [$d['id']]));
-    $r2 = $svc->request($d['uid'], $d['id'], 'again');
-    check('duplicate request -> same refund, created=false, one row', $r2['created'] === false && (int) $r2['refund']['id'] === (int) $r1['refund']['id'] && (int) val('SELECT COUNT(*) FROM refunds WHERE order_id = ?', [$d['id']]) === 1);
+    check('seeded legacy request: status requested, requested_by set', $row['status'] === 'requested' && (int) $row['requested_by_user_id'] === $d['uid'] && $row['reviewed_by_admin_id'] === null);
+    check('seeded amount is the captured payment amount (49.90), payment_id linked', $row['amount'] === '49.90' && (int) $row['payment_id'] === (int) val('SELECT id FROM payments WHERE order_id = ?', [$d['id']]));
+    check('RefundService has no customer request() method', !method_exists(RefundService::class, 'request'));
 
     // --- two processes racing past the "existing open refund" check ---
     // Parent holds an uncommitted conflicting row so both children reach INSERT and queue on the unique key.
@@ -206,11 +206,11 @@ try {
     }
     sort($outs);
     $raceId = (int) val('SELECT id FROM refunds WHERE order_id = ?', [$race['id']]);
-    check('concurrent requests: one created, one existing, same id, exactly one row', $outs === ["created:$raceId", "existing:$raceId"] && (int) val('SELECT COUNT(*) FROM refunds WHERE order_id = ?', [$race['id']]) === 1, implode(',', $outs));
+    check('concurrent admin opens: one created, one existing, same id, exactly one row', $outs === ["created:$raceId", "existing:$raceId"] && (int) val('SELECT COUNT(*) FROM refunds WHERE order_id = ?', [$race['id']]) === 1, implode(',', $outs));
 
     // --- reject ---
     $rej = paidOrder();
-    $rr = $svc->request($rej['uid'], $rej['id'], 'not needed');
+    $rr = seedRequest($rej['uid'], $rej['id'], 'not needed');
     $rid = (int) $rr['refund']['id'];
     check('reject without note -> validation_error fields.note', str_starts_with(attempt(fn () => $svc->reject($rid, $ADMIN, '   ')), 'validation_error|400|{"note"'));
     check('reject with 501-char note -> validation_error', str_starts_with(attempt(fn () => $svc->reject($rid, $ADMIN, str_repeat('n', 501))), 'validation_error|400|{"note"'));
@@ -219,8 +219,8 @@ try {
     check('reject -> rejected, note trimmed, reviewer set, order still paid', $out['status'] === 'rejected' && $row['admin_note'] === 'outside policy' && (int) $row['reviewed_by_admin_id'] === $ADMIN && val('SELECT status FROM orders WHERE id = ?', [$rej['id']]) === 'paid');
     check('reject writes audit row with admin_id', (int) val("SELECT COUNT(*) FROM audit_logs WHERE action = 'refund.reject' AND entity_type = 'refund' AND entity_id = ? AND admin_id = ?", [$rid, $ADMIN]) === 1);
     check('approve a rejected refund -> invalid_transition 409', str_starts_with(attempt(fn () => $svc->approve($rid, $ADMIN, null)), 'invalid_transition|409|'));
-    $again = $svc->request($rej['uid'], $rej['id'], 'second try');
-    check('after rejection the customer may request again (new row)', $again['created'] === true && (int) $again['refund']['id'] !== $rid);
+    $again = seedRequest($rej['uid'], $rej['id'], 'second try');
+    check('after rejection a new row may be opened', $again['created'] === true && (int) $again['refund']['id'] !== $rid);
     check('no gateway call for request/reject', count($gw->calls) === 0);
 
     // --- approve digital, redeemed code ---
@@ -240,7 +240,6 @@ try {
     check('customer reissue on refunded order refused (not_found)', str_starts_with(attempt(fn () => AccessCodeService::reissue($d['id'], null, $d['uid'], 'customer_request')), 'not_found|404|'));
     check('reveal on refunded order -> null', AccessCodeService::revealForOwner($d['uid'], $d['id']) === null);
     check('audit: refund.approve + refund.refunded rows with admin_id', (int) val("SELECT COUNT(*) FROM audit_logs WHERE entity_type = 'refund' AND entity_id = ? AND admin_id = ? AND action IN ('refund.approve', 'refund.refunded')", [$refId, $ADMIN]) === 2);
-    check('request on refunded order returns the existing refunded refund', ($x = $svc->request($d['uid'], $d['id'], 'more'))['created'] === false && (int) $x['refund']['id'] === $refId);
 
     // --- refunded order is never re-fulfilled ---
     check('markPaid on a refunded order -> already_paid, stays refunded, no new code', OrderFulfillment::markPaid($d['rzp'], $d['pay'], 4990) === 'already_paid' && val('SELECT status FROM orders WHERE id = ?', [$d['id']]) === 'refunded' && (int) val("SELECT COUNT(*) FROM access_codes WHERE order_id = ? AND status <> 'revoked'", [$d['id']]) === 0);
@@ -254,19 +253,19 @@ try {
 
     // --- digital, unredeemed code ---
     $u = paidOrder();
-    $uid = (int) $svc->request($u['uid'], $u['id'], 'never used')['refund']['id'];
+    $uid = (int) seedRequest($u['uid'], $u['id'], 'never used')['refund']['id'];
     $svc->approve($uid, $ADMIN, null);
     $c = q('SELECT status, code_enc FROM access_codes WHERE order_id = ?', [$u['id']])->fetch();
     check('unredeemed code -> revoked, code_enc NULL, no book_access', $c['status'] === 'revoked' && $c['code_enc'] === null && access($u['uid']) === null);
 
     // --- hard copy ---
     $h = paidOrder('hardcopy');
-    $hid = (int) $svc->request($h['uid'], $h['id'], 'wrong book')['refund']['id'];
+    $hid = (int) seedRequest($h['uid'], $h['id'], 'wrong book')['refund']['id'];
     $svc->approve($hid, $ADMIN, null);
     check('hardcopy before shipping -> fulfilment cancelled, order refunded', val("SELECT CONCAT(status, '|', fulfilment_status) FROM orders WHERE id = ?", [$h['id']]) === 'refunded|cancelled');
     $hs = paidOrder('hardcopy');
     q("UPDATE orders SET fulfilment_status = 'shipped', courier = 'X', tracking_number = 'T1', shipped_at = NOW() WHERE id = ?", [$hs['id']]);
-    $hsid = (int) $svc->request($hs['uid'], $hs['id'], 'arrived damaged')['refund']['id'];
+    $hsid = (int) seedRequest($hs['uid'], $hs['id'], 'arrived damaged')['refund']['id'];
     $svc->approve($hsid, $ADMIN, null);
     check('hardcopy after shipped -> refund processed, fulfilment stays shipped', val("SELECT CONCAT(status, '|', fulfilment_status) FROM orders WHERE id = ?", [$hs['id']]) === 'refunded|shipped' && refundRow($hsid)['status'] === 'refunded');
     check('audit records the item had already shipped', (int) val("SELECT COUNT(*) FROM audit_logs WHERE action = 'refund.already_shipped' AND entity_type = 'refund' AND entity_id = ? AND JSON_UNQUOTE(JSON_EXTRACT(detail, '$.fulfilmentStatus')) = 'shipped'", [$hsid]) === 1);
@@ -274,22 +273,22 @@ try {
     // --- commissions ---
     $cp = paidOrder('digital', true);
     check('fixture: referral order has a pending commission', val('SELECT status FROM commissions WHERE order_id = ?', [$cp['id']]) === 'pending');
-    $svc->approve((int) $svc->request($cp['uid'], $cp['id'], 'x')['refund']['id'], $ADMIN, null);
+    $svc->approve((int) seedRequest($cp['uid'], $cp['id'], 'x')['refund']['id'], $ADMIN, null);
     $cm = q('SELECT status, reversed_at, clawback_due FROM commissions WHERE order_id = ?', [$cp['id']])->fetch();
     check('commission pending -> reversed with reversed_at, no clawback', $cm['status'] === 'reversed' && $cm['reversed_at'] !== null && (int) $cm['clawback_due'] === 0);
     $cy = paidOrder('digital', true);
     q("UPDATE commissions SET status = 'payable' WHERE order_id = ?", [$cy['id']]);
-    $svc->approve((int) $svc->request($cy['uid'], $cy['id'], 'x')['refund']['id'], $ADMIN, null);
+    $svc->approve((int) seedRequest($cy['uid'], $cy['id'], 'x')['refund']['id'], $ADMIN, null);
     check('commission payable -> reversed', val('SELECT status FROM commissions WHERE order_id = ?', [$cy['id']]) === 'reversed');
     $cpd = paidOrder('hardcopy', true);
     q("UPDATE commissions SET status = 'paid', paid_at = NOW(), payout_reference = 'UPI123' WHERE order_id = ?", [$cpd['id']]);
-    $svc->approve((int) $svc->request($cpd['uid'], $cpd['id'], 'x')['refund']['id'], $ADMIN, null);
+    $svc->approve((int) seedRequest($cpd['uid'], $cpd['id'], 'x')['refund']['id'], $ADMIN, null);
     $cm = q('SELECT status, reversed_at, clawback_due, payout_reference FROM commissions WHERE order_id = ?', [$cpd['id']])->fetch();
     check('commission already paid -> stays paid, clawback_due=1, not reversed', $cm['status'] === 'paid' && (int) $cm['clawback_due'] === 1 && $cm['reversed_at'] === null && $cm['payout_reference'] === 'UPI123');
 
     // --- gateway failure, then retry ---
     $f = paidOrder('digital', true);
-    $fid = (int) $svc->request($f['uid'], $f['id'], 'x')['refund']['id'];
+    $fid = (int) seedRequest($f['uid'], $f['id'], 'x')['refund']['id'];
     $gw->next = 'throw';
     $out = $svc->approve($fid, $ADMIN, null);
     $row = refundRow($fid);
@@ -304,7 +303,7 @@ try {
 
     // --- gateway pending -> processing, finalised later (the webhook path) ---
     $pn = paidOrder();
-    $pid = (int) $svc->request($pn['uid'], $pn['id'], 'x')['refund']['id'];
+    $pid = (int) seedRequest($pn['uid'], $pn['id'], 'x')['refund']['id'];
     $gw->next = 'pending';
     $calls = count($gw->calls);
     $out = $svc->approve($pid, $ADMIN, null);
@@ -316,16 +315,16 @@ try {
     check('finalise(processing) -> true', $svc->finalise($pid) === true);
     check('after finalise: refunded, order refunded, code revoked', refundRow($pid)['status'] === 'refunded' && val('SELECT status FROM orders WHERE id = ?', [$pn['id']]) === 'refunded' && val('SELECT status FROM access_codes WHERE order_id = ?', [$pn['id']]) === 'revoked');
     $rq = paidOrder();
-    $rqid = (int) $svc->request($rq['uid'], $rq['id'], 'x')['refund']['id'];
+    $rqid = (int) seedRequest($rq['uid'], $rq['id'], 'x')['refund']['id'];
     check('finalise on a merely requested refund -> false, nothing changes', $svc->finalise($rqid) === false && refundRow($rqid)['status'] === 'requested' && val('SELECT status FROM orders WHERE id = ?', [$rq['id']]) === 'paid');
 
     // --- late webhook (fromWebhook=true): failed refund, no stored id, newer request open on the order ---
     $lw = paidOrder('digital', true);
-    $lwFailed = (int) $svc->request($lw['uid'], $lw['id'], 'x')['refund']['id'];
+    $lwFailed = (int) seedRequest($lw['uid'], $lw['id'], 'x')['refund']['id'];
     $gw->next = 'throw';
     $svc->approve($lwFailed, $ADMIN, null); // timed out, but the money actually went
     $gw->next = 'processed';
-    $lwOpen = (int) $svc->request($lw['uid'], $lw['id'], 'still want it')['refund']['id'];
+    $lwOpen = (int) seedRequest($lw['uid'], $lw['id'], 'still want it')['refund']['id'];
     check('fixture: failed refund with NULL refund id + newer requested refund on the same order', refundRow($lwFailed)['status'] === 'failed' && refundRow($lwFailed)['razorpay_refund_id'] === null && refundRow($lwOpen)['status'] === 'requested');
     $calls = count($gw->calls);
     $ok = $svc->finalise($lwFailed, "rfnd_late_$tag", true);
@@ -334,18 +333,18 @@ try {
     $before = snapshot($lw, $lwOpen);
     check('replayed late webhook (failed one again) -> true, nothing changes', $svc->finalise($lwFailed, "rfnd_late_$tag", true) === true && snapshot($lw, $lwOpen) === $before);
     $lf = paidOrder();
-    $lfId = (int) $svc->request($lf['uid'], $lf['id'], 'x')['refund']['id'];
+    $lfId = (int) seedRequest($lf['uid'], $lf['id'], 'x')['refund']['id'];
     $gw->next = 'throw';
     $svc->approve($lfId, $ADMIN, null);
     $gw->next = 'processed';
     check('webhook finalise of a lone failed refund (NULL id) -> refunded, id stored', $svc->finalise($lfId, "rfnd_lone_$tag", true) === true && refundRow($lfId)['status'] === 'refunded' && refundRow($lfId)['razorpay_refund_id'] === "rfnd_lone_$tag" && val('SELECT status FROM orders WHERE id = ?', [$lf['id']]) === 'refunded');
     $wr = paidOrder();
-    $wrId = (int) $svc->request($wr['uid'], $wr['id'], 'x')['refund']['id'];
+    $wrId = (int) seedRequest($wr['uid'], $wr['id'], 'x')['refund']['id'];
     check('webhook finalise of a requested refund -> refunded, order refunded, code revoked', $svc->finalise($wrId, "rfnd_req_$tag", true) === true && refundRow($wrId)['status'] === 'refunded' && val('SELECT status FROM orders WHERE id = ?', [$wr['id']]) === 'refunded' && val('SELECT status FROM access_codes WHERE order_id = ?', [$wr['id']]) === 'revoked');
 
     // --- refund.failed: processing -> failed, nothing money-side; approve again retries ---
     $mf = paidOrder('digital', true);
-    $mfId = (int) $svc->request($mf['uid'], $mf['id'], 'x')['refund']['id'];
+    $mfId = (int) seedRequest($mf['uid'], $mf['id'], 'x')['refund']['id'];
     $gw->next = 'pending';
     $svc->approve($mfId, $ADMIN, null);
     $gw->next = 'processed';
@@ -356,7 +355,7 @@ try {
 
     // --- two processes approving the same refund: one gateway call ---
     $ca = paidOrder();
-    $caId = (int) $svc->request($ca['uid'], $ca['id'], 'x')['refund']['id'];
+    $caId = (int) seedRequest($ca['uid'], $ca['id'], 'x')['refund']['id'];
     $log = sys_get_temp_dir() . "/refund_calls_$tag.log";
     @unlink($log);
     $db->beginTransaction();
@@ -381,6 +380,7 @@ try {
 
     // --- admin-opened refunds ---
     $ao = paidOrder('digital', true);
+    $unpaid = paidOrder('digital', false, false);
     check('adminOpen: reason required', str_starts_with(attempt(fn () => $svc->adminOpen($ao['id'], $ADMIN, '')), 'validation_error|400|{"reason"'));
     check('adminOpen: unknown order -> not_found', str_starts_with(attempt(fn () => $svc->adminOpen(0, $ADMIN, 'x')), 'not_found|404|'));
     check('adminOpen: unpaid order -> not_refundable', str_starts_with(attempt(fn () => $svc->adminOpen($unpaid['id'], $ADMIN, 'x')), 'not_refundable|409|'));
