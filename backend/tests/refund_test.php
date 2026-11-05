@@ -485,14 +485,6 @@ try {
         RefundService::flagExternalUnmatched("pay_not_ours_$tag", "rfnd_{$tag}_x", 4990, 'unknown_refund') === false
         && (int) val("SELECT COUNT(*) FROM audit_logs WHERE action = 'refund.external_unmatched' AND CAST(detail AS CHAR) LIKE ?", ["%rfnd_{$tag}_x%"]) === 0);
 
-    // Payout hold covers a failed refund without a gateway id (may have succeeded); a real refund.failed (id) does not.
-    $hold = paidOrder('digital', true);
-    $holdRf = $mkRefund($hold, 'failed', null, 1);
-    $cid = (int) val('SELECT id FROM commissions WHERE order_id = ?', [$hold['id']]);
-    check('failed refund with NULL refund id holds payout (refund_open 409)', str_starts_with(attempt(fn () => \App\Referral\CommissionService::markPayable($cid, $ADMIN)), 'refund_open|409|'));
-    q('UPDATE refunds SET razorpay_refund_id = ? WHERE id = ?', ["rfnd_{$tag}_holdf", $holdRf]);
-    check('failed refund with a gateway refund id releases the hold', attempt(fn () => \App\Referral\CommissionService::markPayable($cid, $ADMIN)) === 'ok');
-
     // --- no plaintext codes or secrets in refund audit rows ---
     $ids = implode(',', array_map('intval', $userIds));
     check('refund audit detail never holds code_enc/plaintext keys', (int) val("SELECT COUNT(*) FROM audit_logs WHERE entity_type = 'refund' AND (CAST(detail AS CHAR) LIKE '%code_enc%' OR CAST(detail AS CHAR) LIKE '%secret%') AND entity_id IN (SELECT id FROM refunds WHERE order_id IN (SELECT id FROM orders WHERE user_id IN ($ids)))") === 0);

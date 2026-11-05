@@ -1091,16 +1091,9 @@ check "commissions list: bad status / partnerId 400; status filter applies" "$([
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":"UPI-1"}'
 check "markPaid on pending -> 400 invalid_transition" "$([ "$PCODE" = "400" ] && jh "$P" '"code":"invalid_transition"' && echo true || echo false)"
 RFP=$(seed_request "$PO1")
-post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/payable" ''; S1="$PCODE $(jh "$P" '"code":"refund_open"' && echo y)"
-get_json "$ADMIN_TOKEN" "/api/admin/commissions?partnerId=$PID1"
-check "open refund request: payable -> 409 refund_open, row shows refundOpen true, still pending" "$([ -n "$RFP" ] && [ "$S1" = "409 y" ] && jh "$G" "\"id\":$C1,[^{]*\\{[^}]*\\},[^}]*\"refundOpen\":true" && [ "$(sql "SELECT status FROM commissions WHERE id=$C1")" = "pending" ] && echo true || echo false)"
-post_json "$ADMIN_TOKEN" "/api/admin/refunds/$RFP/reject" '{"note":"Not eligible"}'
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/payable" ''
-check "after the refund is rejected: markPayable -> 200 payable, payable_at set, refundOpen false" "$([ "$PCODE" = "200" ] && jh "$P" '"status":"payable"' && jh "$P" '"refundOpen":false' && [ "$(sql "SELECT payable_at IS NOT NULL FROM commissions WHERE id=$C1")" = "1" ] && echo true || echo false)"
-RFP=$(seed_request "$PO1")
-post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":"UPI-77881"}'; S1="$PCODE $(jh "$P" '"code":"refund_open"' && echo y)"
+check "no payout hold (decision B): open refund row, payable -> 200 payable, payable_at set, no refundOpen key" "$([ -n "$RFP" ] && [ "$PCODE" = "200" ] && jh "$P" '"status":"payable"' && ! jh "$P" 'refundOpen' && [ "$(sql "SELECT payable_at IS NOT NULL FROM commissions WHERE id=$C1")" = "1" ] && echo true || echo false)"
 post_json "$ADMIN_TOKEN" "/api/admin/refunds/$RFP/reject" '{"note":"Not eligible"}'
-check "open refund request: paid -> 409 refund_open, stays payable" "$([ -n "$RFP" ] && [ "$S1" = "409 y" ] && [ "$(sql "SELECT status FROM commissions WHERE id=$C1")" = "payable" ] && echo true || echo false)"
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{}'; S1="$PCODE $(jh "$P" '"fields":\{"payoutReference"' && echo y)"
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":"a\nb"}'; S2=$PCODE
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":" UPI-77881 "}'

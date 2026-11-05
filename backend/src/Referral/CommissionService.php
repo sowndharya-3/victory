@@ -18,15 +18,8 @@ class CommissionService
     public const MAX_RATE_PAISE = 1000000; // Rs 10000
     private const REFERENCE = '/^[A-Za-z0-9][A-Za-z0-9 .\/#:_-]{0,99}\z/';
 
-    /** Refund states that hold a payout: the order may still be refunded. */
-    // A failed refund without a gateway refund id may have timed out after Razorpay refunded: hold until the
-    // reconciler settles it or an admin rejects it. A failed one with an id came from a real refund.failed.
-    private const OPEN_REFUND = "EXISTS (SELECT 1 FROM refunds r WHERE r.order_id = c.order_id AND (r.status IN ('requested', 'approved', 'processing')
-        OR (r.status = 'failed' AND r.razorpay_refund_id IS NULL)))";
-
-    /** Joined row for format(): commission + order number + partner + open-refund flag. */
-    public const SELECT = 'SELECT c.*, o.order_number, p.name AS partner_name, p.referral_code, p.active AS partner_active, '
-        . self::OPEN_REFUND . ' AS refund_open
+    /** Joined row for format(): commission + order number + partner. */
+    public const SELECT = 'SELECT c.*, o.order_number, p.name AS partner_name, p.referral_code, p.active AS partner_active
         FROM commissions c JOIN orders o ON o.id = c.order_id JOIN referral_partners p ON p.id = c.referral_partner_id';
 
     /** @return array{digital:string,hardcopy:string} */
@@ -103,7 +96,6 @@ class CommissionService
             'payableAt' => $c['payable_at'],
             'paidAt' => $c['paid_at'],
             'clawbackDue' => (bool) $c['clawback_due'],
-            'refundOpen' => (bool) $c['refund_open'],
             'reversedAt' => $c['reversed_at'],
             'createdAt' => $c['created_at'],
         ];
@@ -134,15 +126,6 @@ class CommissionService
             if ($status !== $from) {
                 // 400 like the other admin transitions (Task 19); refunds use 409 for their own state machine.
                 throw new ApiException("Cannot move commission from $status to $to", 400, 'invalid_transition');
-            }
-            // Hold the payout while the order can still be refunded. Plain (non-locking) read: we hold only this
-            // commission lock and take no refund/order lock, so RefundService (refund -> payment+order -> commission)
-            // cannot deadlock with us. Residual race: a refund opened after this read still ends as clawback_due.
-            $stmt = $db->prepare('SELECT o.status, ' . self::OPEN_REFUND . ' AS refund_open FROM commissions c JOIN orders o ON o.id = c.order_id WHERE c.id = ?');
-            $stmt->execute([$id]);
-            $o = $stmt->fetch();
-            if ($o['refund_open'] || $o['status'] !== 'paid') {
-                throw new ApiException('The order has an open refund or is no longer paid; payout is on hold', 409, 'refund_open');
             }
             if ($to === 'payable') {
                 $db->prepare("UPDATE commissions SET status = 'payable', payable_at = NOW() WHERE id = ?")->execute([$id]);

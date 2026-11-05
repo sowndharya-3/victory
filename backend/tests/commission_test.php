@@ -153,8 +153,8 @@ try {
     check('partner deactivation changes no commission row', json_encode(q('SELECT * FROM commissions WHERE referral_partner_id = ? ORDER BY id', [$partnerId])->fetchAll()) === $snap);
     check('earned commission of an inactive partner can still be paid out', attempt(fn () => CommissionService::markPayable($newH, $ADMIN)) === 'ok' && cm($newH)['status'] === 'payable');
 
-    // --- payout held while the order can still be refunded ---
-    $openRefund = function (int $commissionId, string $status): int {
+    // --- no payout hold (owner decision B): an open refund of any state never blocks payable/paid ---
+    $openRefund = function (int $commissionId, string $status, bool $withId = false): int {
         global $db;
         $orderId = (int) cm($commissionId)['order_id'];
         q("INSERT INTO refunds (order_id, payment_id, status, reason, amount) SELECT ?, id, ?, 'test', amount FROM payments WHERE order_id = ?", [$orderId, $status, $orderId]);
@@ -162,22 +162,13 @@ try {
     };
     $held = paidReferralOrder('digital');
     $rf = $openRefund($held, 'requested');
-    check('open (requested) refund blocks markPayable -> refund_open 409, row unchanged', str_starts_with(attempt(fn () => CommissionService::markPayable($held, $ADMIN)), 'refund_open|409|') && cm($held)['status'] === 'pending' && cm($held)['payable_at'] === null);
-    check('commission row reports refundOpen', CommissionService::find($held)['refundOpen'] === true);
-    q("UPDATE refunds SET status = 'rejected' WHERE id = ?", [$rf]);
-    check('after the refund is rejected markPayable works; refundOpen false', attempt(fn () => CommissionService::markPayable($held, $ADMIN)) === 'ok' && CommissionService::find($held)['refundOpen'] === false);
-    foreach (['approved', 'processing'] as $st) {
-        $rf = $openRefund($held, $st);
-        check("$st refund blocks markPaid -> refund_open 409", str_starts_with(attempt(fn () => CommissionService::markPaid($held, $ADMIN, 'UPI-9')), 'refund_open|409|') && cm($held)['status'] === 'payable');
-        q("UPDATE refunds SET status = 'failed' WHERE id = ?", [$rf]);
-        // Failed without a gateway refund id (may have timed out after Razorpay refunded): still on hold.
-        check("$st refund failed without a refund id still holds markPaid", str_starts_with(attempt(fn () => CommissionService::markPaid($held, $ADMIN, 'UPI-9')), 'refund_open|409|'));
-        q("UPDATE refunds SET razorpay_refund_id = CONCAT('rfnd_ctest_', id) WHERE id = ?", [$rf]); // a real refund.failed
-    }
-    check('after the refund failed (gateway refund.failed) markPaid works',attempt(fn () => CommissionService::markPaid($held, $ADMIN, 'UPI-9')) === 'ok' && cm($held)['status'] === 'paid');
-    $gone = paidReferralOrder('hardcopy');
-    q("UPDATE orders SET status = 'refunded' WHERE id = ?", [cm($gone)['order_id']]);
-    check('order no longer paid blocks markPayable -> refund_open', str_starts_with(attempt(fn () => CommissionService::markPayable($gone, $ADMIN)), 'refund_open|409|'));
+    check('open (requested) refund does not block markPayable', attempt(fn () => CommissionService::markPayable($held, $ADMIN)) === 'ok' && cm($held)['status'] === 'payable');
+    check('commission row has no refundOpen key', !array_key_exists('refundOpen', CommissionService::find($held)));
+    q("UPDATE refunds SET status = 'processing' WHERE id = ?", [$rf]);
+    check('processing refund does not block markPaid', attempt(fn () => CommissionService::markPaid($held, $ADMIN, 'UPI-9')) === 'ok' && cm($held)['status'] === 'paid');
+    $failed = paidReferralOrder('digital');
+    $openRefund($failed, 'failed');
+    check('failed refund without a gateway id does not block markPayable', attempt(fn () => CommissionService::markPayable($failed, $ADMIN)) === 'ok');
 
     // --- migration 008: one partner per normalised gmail, one open application per gmail ---
     $dupErr = function (string $sql, array $p): ?\PDOException {
