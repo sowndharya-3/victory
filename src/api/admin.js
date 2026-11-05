@@ -84,7 +84,6 @@ export const togglePartner = (id) => req(`/api/admin/partners/${id}/toggle-activ
 export const fetchCommissions = (params) => req(`/api/admin/commissions${qs(params)}`)
 export const markCommissionPayable = (id) => req(`/api/admin/commissions/${id}/payable`, { method: 'POST' })
 export const markCommissionPaid = (id, payoutReference) => req(`/api/admin/commissions/${id}/paid`, { method: 'POST', body: { payoutReference } })
-export const settleClawback = (id, reference) => req(`/api/admin/commissions/${id}/clawback-settled`, { method: 'POST', body: { reference } })
 
 // Rates and pricing values go to the API as strings (the backend parses "N.NN" without floats).
 const asStrings = (obj) => Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, String(v)]))

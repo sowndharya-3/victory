@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  fetchCommissions, markCommissionPayable, markCommissionPaid, settleClawback, fetchCommissionSettings, saveCommissionSettings,
+  fetchCommissions, markCommissionPayable, markCommissionPaid, fetchCommissionSettings, saveCommissionSettings,
   adminErrorMessage, formatRupees,
 } from '../../api/admin'
 import { useLoad, LoadState, Table } from './adminUi'
@@ -53,9 +53,6 @@ function CommissionRow({ c, onDone }) {
   const [reference, setReference] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [clawRef, setClawRef] = useState('')
-  const [confirming, setConfirming] = useState(false)
-  const openClawback = c.clawbackDue && !c.clawbackSettled
 
   const act = async (fn) => {
     setBusy(true)
@@ -64,7 +61,7 @@ function CommissionRow({ c, onDone }) {
       await fn()
       onDone()
     } catch (err) {
-      setError(err.fields?.payoutReference || err.fields?.reference || adminErrorMessage(err))
+      setError(err.fields?.payoutReference || adminErrorMessage(err))
     } finally {
       setBusy(false)
     }
@@ -80,8 +77,6 @@ function CommissionRow({ c, onDone }) {
       <td>
         {c.status}
         {c.refundOpen && <span className="admin-badge">Refund open</span>}
-        {openClawback && <span className="admin-badge">Clawback due</span>}
-        {c.clawbackSettled && <span className="admin-badge">Clawback settled{c.clawbackReference ? ` (${c.clawbackReference})` : ''}{c.clawbackSettledAt ? ` ${c.clawbackSettledAt}` : ''}</span>}
       </td>
       <td>{c.payoutReference ?? '—'}</td>
       <td>{c.createdAt}</td>
@@ -97,25 +92,6 @@ function CommissionRow({ c, onDone }) {
               if (!reference.trim()) return setError('A payout reference is required.')
               act(() => markCommissionPaid(c.id, reference.trim()))
             }}>Mark paid</button>
-          </>
-        )}
-        {openClawback && (
-          <>
-            <label htmlFor={`clawback-${c.id}`}>Clawback reference</label>
-            <input id={`clawback-${c.id}`} className="form-control" maxLength={100} value={clawRef} onChange={e => { setClawRef(e.target.value); setConfirming(false) }} />
-            {!confirming ? (
-              <button type="button" disabled={busy} onClick={() => {
-                if (!clawRef.trim()) return setError('A clawback reference is required.')
-                setError('')
-                setConfirming(true)
-              }}>Mark clawback settled</button>
-            ) : (
-              <>
-                <span>Confirm: recovered from partner, ref {clawRef.trim()}?</span>
-                <button type="button" disabled={busy} onClick={() => act(() => settleClawback(c.id, clawRef.trim()))}>Confirm settled</button>
-                <button type="button" disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
-              </>
-            )}
           </>
         )}
         {error && <p role="alert" className="form-error">{error}</p>}
@@ -141,8 +117,6 @@ function AdminCommissionsPage() {
           {STATUSES.map(k => (
             <li key={k}><span>{k[0].toUpperCase() + k.slice(1)} ({t[k]?.count ?? 0})</span><strong>{formatRupees(t[k]?.amount)}</strong></li>
           ))}
-          {t.clawbackSettled?.count > 0 && <li><span>Clawback settled ({t.clawbackSettled.count})</span><strong>{formatRupees(t.clawbackSettled.amount)}</strong></li>}
-          {t.clawbackDue?.count > 0 && <li><span>Clawback due ({t.clawbackDue.count})</span><strong>{formatRupees(t.clawbackDue.amount)}</strong></li>}
         </ul>
       )}
       <div className="admin-filters">

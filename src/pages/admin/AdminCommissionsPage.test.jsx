@@ -8,7 +8,7 @@ afterEach(() => vi.restoreAllMocks())
 const commission = (over = {}) => ({
   id: 4, orderId: 7, orderNumber: 'VT-0007', partner: { id: 2, name: 'Ravi', referralCode: 'VTP-ABC123', active: true },
   purchaseType: 'digital', amount: '25.00', status: 'payable', payoutReference: null, payableAt: null, paidAt: null,
-  clawbackDue: false, reversedAt: null, createdAt: '2026-10-29 10:00:00', ...over,
+  reversedAt: null, createdAt: '2026-10-29 10:00:00', ...over,
 })
 
 function setup(rows) {
@@ -18,7 +18,7 @@ function setup(rows) {
     // shape from backend AdminCommissionController::list
     totals: {
       pending: { count: 0, amount: '0.00' }, payable: { count: 1, amount: '25.00' }, paid: { count: 2, amount: '60.00' },
-      reversed: { count: 0, amount: '0.00' }, clawbackDue: { count: 0, amount: '0.00' },
+      reversed: { count: 0, amount: '0.00' },
     },
   })
   render(<AdminCommissionsPage />)
@@ -60,25 +60,4 @@ test('saving rates sends strings', async () => {
   fireEvent.change(await screen.findByLabelText(/digital commission/i), { target: { value: '40' } })
   fireEvent.click(screen.getByRole('button', { name: /save rates/i }))
   await waitFor(() => expect(save).toHaveBeenCalledWith({ digital: '40', hardcopy: '30.00' }))
-})
-
-test('clawback settle requires a reference and a confirm step', async () => {
-  setup([commission({ status: 'paid', clawbackDue: true, clawbackSettled: false })])
-  const settle = vi.spyOn(adminApi, 'settleClawback').mockResolvedValue({})
-  const tr = (await screen.findByText('VT-0007')).closest('tr')
-  fireEvent.click(within(tr).getByRole('button', { name: /mark clawback settled/i }))
-  expect(within(tr).getByText(/clawback reference is required/i)).toBeInTheDocument()
-  fireEvent.change(within(tr).getByLabelText(/clawback reference/i), { target: { value: 'BANK-9' } })
-  fireEvent.click(within(tr).getByRole('button', { name: /mark clawback settled/i }))
-  expect(settle).not.toHaveBeenCalled()
-  fireEvent.click(within(tr).getByRole('button', { name: /confirm settled/i }))
-  await waitFor(() => expect(settle).toHaveBeenCalledWith(4, 'BANK-9'))
-})
-
-test('settled clawback shows state and no action', async () => {
-  setup([commission({ status: 'paid', clawbackDue: true, clawbackSettled: true, clawbackSettledAt: '2026-11-01 09:00:00', clawbackReference: 'BANK-9' })])
-  const tr = (await screen.findByText('VT-0007')).closest('tr')
-  expect(within(tr).getByText(/clawback settled \(BANK-9\)/i)).toBeInTheDocument()
-  expect(within(tr).queryByRole('button', { name: /mark clawback settled/i })).toBeNull()
-  expect(within(tr).queryByText(/clawback due/i)).toBeNull()
 })
