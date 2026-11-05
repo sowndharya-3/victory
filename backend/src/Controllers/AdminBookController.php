@@ -54,17 +54,39 @@ class AdminBookController
 
     public function update(string $id): void
     {
-        AuthMiddleware::requireRole(['admin']);
-        $book = $this->findOrFail($id);
+        $admin = AuthMiddleware::requireRole(['admin']);
+        $this->findOrFail($id);
         $data = json_decode(file_get_contents('php://input'), true);
         if (!is_array($data) || ($data && array_is_list($data))) {
             throw new ApiException('Validation failed', 400, 'validation_error', ['body' => 'Must be a JSON object']);
         }
         $row = self::validateFields($data);
-        self::requireSellable($row + $book); // a published book must stay sellable (same rule as publish)
-        if ($row) {
-            $set = implode(', ', array_map(fn($c) => "{$c} = :{$c}", array_keys($row)));
-            Db::connection()->prepare("UPDATE books SET {$set} WHERE id = :id")->execute($row + ['id' => $id]);
+        $db = Db::connection();
+        $db->beginTransaction();
+        try {
+            $stmt = $db->prepare('SELECT * FROM books WHERE id = ? FOR UPDATE');
+            $stmt->execute([$id]);
+            $book = $stmt->fetch();
+            self::requireSellable($row + $book); // a published book must stay sellable (same rule as publish)
+            if ($row) {
+                $set = implode(', ', array_map(fn($c) => "{$c} = :{$c}", array_keys($row)));
+                $db->prepare("UPDATE books SET {$set} WHERE id = :id")->execute($row + ['id' => $id]);
+            }
+            // Price changes are audited (old -> new, rupee strings); other metadata edits are not.
+            $changes = [];
+            foreach (['online_price' => 'onlinePrice', 'hardcopy_price' => 'hardcopyPrice'] as $column => $key) {
+                if (isset($row[$column]) && Money::toPaise($row[$column]) !== Money::toPaise((string) $book[$column])) {
+                    $changes[$key] = ['from' => Money::fromPaise(Money::toPaise((string) $book[$column])), 'to' => $row[$column]];
+                }
+            }
+            if ($changes) {
+                $db->prepare("INSERT INTO audit_logs (admin_id, action, entity_type, entity_id, detail) VALUES (?, 'book.price', 'book', ?, ?)")
+                    ->execute([(int) $admin['sub'], (int) $id, json_encode($changes)]);
+            }
+            $db->commit();
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            throw $e;
         }
 
         echo json_encode(self::formatAdmin($this->findOrFail($id)));
