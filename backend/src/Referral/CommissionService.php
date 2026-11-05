@@ -84,40 +84,6 @@ class CommissionService
         return self::transition($commissionId, 'payable', 'paid', $adminId, $ref);
     }
 
-    /**
-     * A paid commission whose order was refunded afterwards (clawback_due=1): record that the money was recovered from
-     * the partner. Only once, under the commission row lock; clawback_due stays 1 as history. @return array commission
-     */
-    public static function settleClawback(int $commissionId, int $adminId, string $reference): array
-    {
-        $ref = trim($reference);
-        if (!preg_match(self::REFERENCE, $ref)) {
-            throw new ApiException('Validation failed', 400, 'validation_error', [
-                'reference' => 'Required: 1-100 characters, letters, digits, space and . / # : _ -',
-            ]);
-        }
-        $db = Db::connection();
-        $db->beginTransaction();
-        try {
-            $stmt = $db->prepare('SELECT clawback_due, clawback_settled_at FROM commissions WHERE id = ? FOR UPDATE');
-            $stmt->execute([$commissionId]);
-            $c = $stmt->fetch();
-            if (!$c) {
-                throw new ApiException('Commission not found', 404, 'not_found');
-            }
-            if (!(int) $c['clawback_due'] || $c['clawback_settled_at'] !== null) {
-                throw new ApiException('No open clawback on this commission', 400, 'invalid_transition');
-            }
-            $db->prepare('UPDATE commissions SET clawback_settled_at = NOW(), clawback_reference = ? WHERE id = ?')->execute([$ref, $commissionId]);
-            self::audit($adminId, 'commission.clawback_settled', 'commission', $commissionId, ['reference' => $ref]);
-            $db->commit();
-        } catch (\Throwable $e) {
-            $db->rollBack();
-            throw $e;
-        }
-        return self::find($commissionId);
-    }
-
     public static function format(array $c): array
     {
         return [
@@ -136,11 +102,7 @@ class CommissionService
             'payoutReference' => $c['payout_reference'],
             'payableAt' => $c['payable_at'],
             'paidAt' => $c['paid_at'],
-            // clawbackDue: still owed by the partner (false once settled); clawbackSettled: recovered.
-            'clawbackDue' => (bool) $c['clawback_due'] && $c['clawback_settled_at'] === null,
-            'clawbackSettled' => $c['clawback_settled_at'] !== null,
-            'clawbackSettledAt' => $c['clawback_settled_at'],
-            'clawbackReference' => $c['clawback_reference'],
+            'clawbackDue' => (bool) $c['clawback_due'],
             'refundOpen' => (bool) $c['refund_open'],
             'reversedAt' => $c['reversed_at'],
             'createdAt' => $c['created_at'],

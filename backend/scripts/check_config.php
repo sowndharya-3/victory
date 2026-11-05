@@ -96,7 +96,6 @@ try {
         '006_audit_logs_entity_index' => fn () => $index('audit_logs', 'idx_audit_entity'),
         '007_commission_payable_at' => fn () => $column('commissions', 'payable_at'),
         '008_partner_email_unique' => fn () => $index('referral_partners', 'uq_partner_gmail') && $index('referral_applications', 'uq_open_application'),
-        '009_commission_clawback_settled' => fn () => $column('commissions', 'clawback_settled_at') && $column('commissions', 'clawback_reference'),
     ];
     foreach ($migrations as $name => $applied) {
         ok($applied(), "migration $name applied");

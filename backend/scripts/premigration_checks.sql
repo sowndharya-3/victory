@@ -31,5 +31,3 @@ FROM referral_partners GROUP BY g HAVING n > 1;
 -- 008: at most one pending/approved application per LOWER(TRIM(gmail))
 SELECT 'open referral_applications gmail duplicate' AS problem, LOWER(TRIM(gmail)) AS g, COUNT(*) AS n, GROUP_CONCAT(id) AS ids
 FROM referral_applications WHERE application_status IN ('pending', 'approved') GROUP BY g HAVING n > 1;
-
--- 009_commission_clawback_settled: two nullable columns, additive; no data pre-check needed.

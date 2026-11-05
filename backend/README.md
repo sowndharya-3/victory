@@ -67,7 +67,7 @@ in `backend/.env`.
 Before every deploy run the config check (CLI only; prints PASS/WARN/FAIL per item, never a secret
 value; exit 1 on any FAIL): `docker compose exec -T php php scripts/check_config.php` (or
 `php backend/scripts/check_config.php`). It checks APP_ENV, gateway mode and key prefix, secret
-strength, `FRONTEND_ORIGIN` (bare https origin), DB reachability, migrations 001-009 (by schema),
+strength, `FRONTEND_ORIGIN` (bare https origin), DB reachability, migrations 001-008 (by schema),
 `storage/books` writable and outside the web root, `public/uploads` writable, `pdfinfo`/`pdftoppm`,
 `prlimit`.
 
@@ -88,11 +88,11 @@ Apply the initial schema against the running stack:
 
 ```bash
 docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/001_init.sql
-# then 002_book_management.sql, 003_orders_payments.sql, 004_refunds.sql, 005_books_page_count.sql, 006_audit_logs_entity_index.sql, 007_commission_payable_at.sql 008_partner_email_unique.sql and 009_commission_clawback_settled.sql, in order
+# then 002_book_management.sql, 003_orders_payments.sql, 004_refunds.sql, 005_books_page_count.sql, 006_audit_logs_entity_index.sql, 007_commission_payable_at.sql and 008_partner_email_unique.sql, in order
 ```
 
 Migrations are one-shot: re-applying a file fails on "already exists" /
-duplicate column and changes no data. 003 to 009 are additive only; never drop the
+duplicate column and changes no data. 003 to 008 are additive only; never drop the
 volume to re-run them. On an existing database, back up first and run the read-only
 `backend/scripts/premigration_checks.sql` (every query must return no rows: duplicate
 Razorpay ids that 003's unique keys would reject, duplicate partner / open-application
@@ -168,7 +168,6 @@ Phone, WhatsApp and UPI are deliberately not unique (families/institutions share
 | GET | /api/admin/commissions?status=&partnerId=&page=&perPage= | admin | `{items:[{id,orderId,orderNumber,partner:{id,name,referralCode,active},purchaseType,amount,status,payoutReference,payableAt,paidAt,clawbackDue,refundOpen,reversedAt,createdAt}], page, perPage, total, totals:{pending,payable,paid,reversed,clawbackDue:{count,amount}}}`; totals honour `partnerId` only. Amounts are `"25.00"` strings |
 | POST | /api/admin/commissions/:id/payable | admin | `pending` → `payable` (`payable_at`) → commission. Anything else 400 `invalid_transition` (`reversed` can never be paid). 409 `refund_open` while the order has a requested/approved/processing refund, a `failed` refund with no Razorpay refund id (may have timed out after Razorpay refunded; released once the cron settles it or an admin rejects it), or is no longer `paid` (same hold for `paid`) |
 | POST | /api/admin/commissions/:id/paid | admin | `{payoutReference}` (required, 1–100 of letters, digits, space `. / # : _ -`) ; `payable` → `paid` (`paid_at`) → commission. 400 `validation_error` / `invalid_transition` |
-| POST | /api/admin/commissions/:id/clawback-settled | admin | `{reference}` (required, same charset/length as `payoutReference`) records that a clawback (`clawbackDue`: paid commission whose order was refunded later) was recovered from the partner: sets `clawback_settled_at`/`clawback_reference` under the row lock, audit `commission.clawback_settled`. Only once and only while due, else 400 `invalid_transition`; 400 `validation_error` (`fields.reference`), 404. Returns the commission: list rows carry `clawbackDue` (still owed; false once settled), `clawbackSettled`, `clawbackSettledAt`, `clawbackReference`; `totals.clawbackDue` counts unsettled only, `totals.clawbackSettled` the settled ones |
 | GET / PUT | /api/admin/settings/commission | admin | `{digital, hardcopy}` flat ₹ per paid referral order, `"25.00"` strings; PUT needs both, 0–10000 with ≤2 decimals (string or number). Applies to orders paid afterwards only: amounts are snapshotted by `markPaid` |
 | GET / PUT | /api/admin/settings/pricing | admin | `{shippingChargeDigital, shippingChargeHardcopy, gstPercentDigital, gstPercentHardcopy, gstMode}` (U1/U2). PUT is partial: shipping 0–10000 ₹, GST 0–100 %, ≤2 decimals, `gstMode` inclusive/exclusive; unknown keys / empty body 400. Applies to new quotes/orders only |
 
