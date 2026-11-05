@@ -102,3 +102,13 @@ test('a stale slower response does not overwrite a newer one', async () => {
   expect(screen.queryByText('VT-OLD')).not.toBeInTheDocument()
   expect(screen.getByText('VT-NEW')).toBeInTheDocument()
 })
+
+test('known admin flags get a plain-language label and tooltip', async () => {
+  vi.spyOn(adminApi, 'fetchAdminOrders').mockResolvedValue(list([
+    row({ id: 1, orderNumber: 'VT-A', adminFlag: 'currency_mismatch' }),
+    row({ id: 2, orderNumber: 'VT-B', adminFlag: 'refund_external_unmatched' }),
+  ]))
+  render(<AdminOrdersPage />)
+  expect(await screen.findByText('Currency mismatch')).toHaveAttribute('title', expect.stringMatching(/different currency/i))
+  expect(screen.getByText('Refund not matched')).toHaveAttribute('title', expect.stringMatching(/outside this system/i))
+})

@@ -9,6 +9,12 @@ const FULFILMENT = ['confirmed', 'processing', 'shipped', 'out_for_delivery', 'd
 // A full access code would end up in the GET query string (and server logs): send admins to Verify instead.
 const looksLikeFullCode = (v) => /^[A-Z0-9]{4,}(-[A-Z0-9]{4,}){2,}$/i.test(v) || /^[A-Z0-9]{16,}$/i.test(v)
 
+const FLAG_TEXT = {
+  currency_mismatch: ['Currency mismatch', 'The payment was captured in a different currency than the order. Check it in Razorpay before fulfilling.'],
+  refund_external_unmatched: ['Refund not matched', 'A refund was made outside this system (e.g. in Razorpay) and could not be matched to a recorded refund. Reconcile it manually.'],
+}
+const flagText = (f) => FLAG_TEXT[f] ?? [label(f), label(f)]
+
 function AdminOrdersPage() {
   const [search, setSearch] = useState('')
   const [searchHint, setSearchHint] = useState('')
@@ -61,7 +67,7 @@ function AdminOrdersPage() {
         <Table head={['Order', 'Customer', 'Book', 'Type', 'Payment', 'Fulfilment', 'Code', 'Amount', 'Created', '']}>
           {items.map(o => (
             <tr key={o.id} className={o.id === selectedId ? 'is-selected' : undefined}>
-              <td>{o.orderNumber}{o.adminFlag && <span className="admin-badge">{label(o.adminFlag)}</span>}</td>
+              <td>{o.orderNumber}{o.adminFlag && <span className="admin-badge" title={flagText(o.adminFlag)[1]}>{flagText(o.adminFlag)[0]}</span>}</td>
               <td>{o.customer?.name}<br /><small>{o.customer?.email}</small></td>
               <td>{o.book?.title}</td>
               <td>{o.purchaseType === 'hardcopy' ? 'Hard copy' : 'Digital'}</td>
