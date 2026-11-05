@@ -25,6 +25,10 @@ use App\Middleware\ErrorHandler;
 // yet to trigger it through curl. Testing AuthMiddleware::requireRole
 // directly closes that specific gap.
 
+// The controllers set status codes with http_response_code(), which PHP 8.3+ ignores once output has been sent
+// (CLI: after the first echo). Buffer the PASS/FAIL lines; they are flushed at exit.
+ob_start();
+
 $failures = 0;
 
 function assertTrue(bool $condition, string $message): void

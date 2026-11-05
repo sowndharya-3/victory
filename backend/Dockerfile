@@ -1,11 +1,11 @@
 # Debian 13 "trixie" (security support until ~2028-08, LTS to ~2030) replaces Debian 11 bullseye (EOL,
 # packages only on archive.debian.org). The old bullseye pin worked around a dev-host containerd
 # "exec format error" with bookworm images; that no longer reproduces (bookworm/trixie images run).
-# Still PHP 8.2: its security support ENDS 2026-12-31. PHP 8.3/8.4 run the app, but there
-# http_response_code() refuses to change the code after output, which breaks the CLI harness of
-# admin_authz_test.php / middleware_test.php (they echo before calling controllers); PHP 8.5 also
-# deprecates curl_close()/finfo_close(). Move to php:8.4-fpm-trixie once those tests buffer output.
-FROM php:8.2-fpm-trixie
+# PHP 8.4 (security support to 2028-12-31). The earlier blocker was only in two CLI test harnesses
+# (admin_authz_test.php, middleware_test.php echo before controllers call http_response_code(), which PHP 8.3+
+# ignores once output is sent); they now buffer their output. curl_close()/finfo_close() are deprecated from 8.5 only.
+# Rollback: the previous 8.2 image is tagged vtee-php:8.2-trixie-rollback, or set this line back to php:8.2-fpm-trixie.
+FROM php:8.4-fpm-trixie
 
 RUN docker-php-ext-install pdo pdo_mysql
 

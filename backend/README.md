@@ -1,6 +1,6 @@
 # Backend
 
-PHP 8.2 (Docker image `php:8.2-fpm-trixie`, Debian 13, poppler-utils 25.03; PHP 8.2 security support ends 2026-12-31, see the Dockerfile for the 8.4 blocker) + MySQL 8.0, no framework, no Composer. See
+PHP 8.4 (Docker image `php:8.4-fpm-trixie`, Debian 13, poppler-utils 25.03; previous 8.2 image kept locally as `vtee-php:8.2-trixie-rollback`) + MySQL 8.0, no framework, no Composer. See
 `docs/superpowers/specs/2026-10-08-backend-foundation-design.md` for the
 full design.
 

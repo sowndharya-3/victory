@@ -19,6 +19,10 @@ use App\Auth\Jwt;
 use App\Middleware\ErrorHandler;
 use App\Router\Router;
 
+// The controllers set status codes with http_response_code(), which PHP 8.3+ ignores once output has been sent
+// (CLI: after the first echo). Buffer the PASS/FAIL lines; they are flushed at exit.
+ob_start();
+
 $failures = 0;
 function check(string $name, bool $ok, string $extra = ''): void
 {
