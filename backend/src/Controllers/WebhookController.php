@@ -83,7 +83,7 @@ class WebhookController
         if (!is_int($amount)) {
             return 'ignored';
         }
-        $result = OrderFulfillment::markPaid($rzpOrderId, $paymentId, $amount, $entity);
+        $result = OrderFulfillment::markPaid($rzpOrderId, $paymentId, $amount, $entity, is_string($entity['currency'] ?? null) ? $entity['currency'] : null);
         if ($result === 'unknown_order') {
             error_log("razorpay webhook: payment.captured for unknown razorpay order (razorpay_order_id={$rzpOrderId}, payment_id={$paymentId})");
         }

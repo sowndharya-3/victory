@@ -334,7 +334,7 @@ wh() { # $1 event id ("" omits header) $2 raw body [$3 signature override; "none
   WCODE=$(curl -s -o "$TMP/w.json" -w '%{http_code}' -X POST "$BASE_URL/api/webhooks/razorpay" -H "Content-Type: application/json" "${args[@]}" --data-binary "$2")
   W=$(cat "$TMP/w.json")
 }
-cap_body() { echo "{\"event\":\"payment.captured\",\"payload\":{\"payment\":{\"entity\":{\"id\":\"$2\",\"order_id\":\"$1\",\"amount\":$3,\"status\":\"captured\"}}}}"; }
+cap_body() { echo "{\"event\":\"payment.captured\",\"payload\":{\"payment\":{\"entity\":{\"id\":\"$2\",\"order_id\":\"$1\",\"amount\":$3,\"currency\":\"${4:-INR}\",\"status\":\"captured\"}}}}"; }
 fail_body() { echo "{\"event\":\"payment.failed\",\"payload\":{\"payment\":{\"entity\":{\"id\":\"$2\",\"order_id\":\"$1\",\"amount\":19900,\"status\":\"failed\",\"error_description\":\"card declined\"}}}}"; }
 processed() { sql "SELECT processed_at IS NOT NULL FROM payment_events WHERE event_id='$1'"; }
 commissions_of() { sql "SELECT COUNT(*) FROM commissions WHERE order_id=$1"; }
@@ -347,6 +347,7 @@ new_order "$TOKEN_E" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"digital\",\"referr
 new_order "$TOKEN_E" "$DIG"; W2=$NID; WR2=$NRZP
 new_order "$TOKEN_E" "$DIG"; W3=$NID; WR3=$NRZP
 new_order "$TOKEN_E" "$DIG"; W4=$NID; WR4=$NRZP
+new_order "$TOKEN_E" "$DIG"; W5=$NID; WR5=$NRZP
 new_order "$TOKEN_E" "{\"bookId\":$BOOK_ID,\"purchaseType\":\"hardcopy\",\"address\":$ADDR}"; WH=$NID; WRH=$NRZP
 check "section 5 fixtures created" "$([ -n "$W1" ] && [ -n "$W4" ] && [ -n "$WH" ] && [ -n "$WR1" ] && [ -n "$WRH" ] && [ "$(sql "SELECT referral_partner_id IS NOT NULL FROM orders WHERE id=$W1")" = "1" ] && echo true || echo false)"
 
@@ -386,6 +387,10 @@ check "payment.failed after capture -> 200, order stays paid" "$([ "$WCODE" = "2
 wh "${EV}_m3" "$(cap_body "$WR3" "pay_wh_3" 100)"
 check "amount mismatch -> 200 flagged" "$([ "$WCODE" = "200" ] && jh "$W" '"status":"flagged"' && echo true || echo false)"
 check "mismatch: order pending, admin_flag amount_mismatch, event processed" "$([ "$(order_status $W3)" = "pending" ] && [ "$(sql "SELECT admin_flag FROM orders WHERE id=$W3")" = "amount_mismatch" ] && [ "$(processed ${EV}_m3)" = "1" ] && echo true || echo false)"
+# Currency mismatch (right amount, not INR) and a missing currency: flagged like an amount mismatch, never paid
+wh "${EV}_cur1" "$(cap_body "$WR5" "pay_wh_5" 19900 USD)"; C1=$WCODE; W1B=$W
+wh "${EV}_cur2" "$(cap_body "$WR5" "pay_wh_5" 19900 | sed 's/,"currency":"INR"//')"
+check "currency USD / missing -> 200 flagged; order pending, admin_flag currency_mismatch, payment untouched, no code" "$([ "$C1" = "200" ] && jh "$W1B" '"status":"flagged"' && jh "$W" '"status":"flagged"' && [ "$(order_status $W5)" = "pending" ] && [ "$(sql "SELECT admin_flag FROM orders WHERE id=$W5")" = "currency_mismatch" ] && [ "$(sql "SELECT status FROM payments WHERE order_id=$W5")" = "created" ] && [ "$(sql "SELECT COUNT(*) FROM access_codes WHERE order_id=$W5")" = "0" ] && echo true || echo false)"
 check "mismatch: full webhook payload stored for inspection" "$([ "$(sql "SELECT JSON_EXTRACT(payload,'\$.payload.payment.entity.amount') FROM payment_events WHERE event_id='${EV}_m3'")" = "100" ] && echo true || echo false)"
 
 # Ignored events and unknown orders

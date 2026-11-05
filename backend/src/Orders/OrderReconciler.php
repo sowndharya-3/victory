@@ -32,7 +32,7 @@ class OrderReconciler
             try {
                 foreach ($gateway->fetchOrderPayments($rzp) as $p) {
                     if (($p['status'] ?? '') === 'captured') {
-                        if (OrderFulfillment::markPaid($rzp, (string) $p['id'], (int) $p['amount'], $p) === 'paid') {
+                        if (OrderFulfillment::markPaid($rzp, (string) $p['id'], (int) $p['amount'], $p, is_string($p['currency'] ?? null) ? $p['currency'] : null) === 'paid') {
                             $result['paid']++;
                         }
                         break;
@@ -63,7 +63,7 @@ class OrderReconciler
                     $authorized = $authorized || ($p['status'] ?? '') === 'authorized';
                 }
                 if ($captured) {
-                    if (OrderFulfillment::markPaid($rzp, (string) $captured['id'], (int) $captured['amount'], $captured) === 'paid') {
+                    if (OrderFulfillment::markPaid($rzp, (string) $captured['id'], (int) $captured['amount'], $captured, is_string($captured['currency'] ?? null) ? $captured['currency'] : null) === 'paid') {
                         $result['paid']++;
                     }
                     continue; // money received: never expire, even on amount_mismatch (admin_flag set for review)

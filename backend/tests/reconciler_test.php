@@ -87,6 +87,7 @@ try {
     $boom = mkOrder(25 * 60);      // gateway throws => untouched, error counted
     $race = mkOrder(25 * 60);      // webhook lands mid-run => stays paid
     $held = mkOrder(25 * 60);      // authorized (not captured) => not expired yet
+    $usd = mkOrder(20);            // captured in USD => flagged currency_mismatch, stays pending
 
     // Second pass: failed/cancelled orders from the last 7 days whose money arrived anyway.
     $failBoom = mkOrder(60, 'failed');               // gateway throws => untouched, error counted, others still run
@@ -97,7 +98,7 @@ try {
     $failOld = mkOrder(8 * 24 * 60, 'failed');       // older than 7 days => not queried
 
     // Every other eligible order in the DB is foreign: the stub throws for it, so it is never touched.
-    $ours = [$fresh, $stale, $young, $lateCap, $paid, $notYet, $boom, $race, $held, $failBoom, $failRetry, $cancCap, $failNone, $cancNone, $failOld];
+    $ours = [$usd, $fresh, $stale, $young, $lateCap, $paid, $notYet, $boom, $race, $held, $failBoom, $failRetry, $cancCap, $failNone, $cancNone, $failOld];
     $ourIds = implode(',', array_map(fn ($o) => $o['id'], $ours));
     $foreign = (int) val("SELECT COUNT(*) FROM orders o JOIN payments p ON p.order_id = o.id
          WHERE o.status = 'pending' AND o.created_at <= NOW() - INTERVAL 15 MINUTE AND p.razorpay_order_id IS NOT NULL AND o.id NOT IN ($ourIds)");
@@ -144,6 +145,7 @@ try {
         $lateCap['rzp'] => [captured($lateCap['rzp'], "pay_{$tag}l")],
         $paid['rzp'] => [],
         $notYet['rzp'] => [],
+        $usd['rzp'] => [['currency' => 'USD'] + captured($usd['rzp'], "pay_{$tag}usd")],
         $held['rzp'] => [['id' => "pay_{$tag}h", 'order_id' => $held['rzp'], 'amount' => 49900, 'status' => 'authorized']],
         $race['rzp'] => function () use ($race, $tag) {
             OrderFulfillment::markPaid($race['rzp'], "pay_{$tag}r", 49900); // the webhook wins between select and expire
@@ -180,6 +182,7 @@ try {
         && array_search($failBoom['rzp'], $gateway->calls, true) < array_search($failRetry['rzp'], $gateway->calls, true));
     check('order cancelled this run is not re-queried', count(array_keys($gateway->calls, $stale['rzp'], true)) === 1);
 
+    check('captured in another currency => not paid, flagged currency_mismatch', status($usd['id']) === 'pending' && val('SELECT admin_flag FROM orders WHERE id = ?', [$usd['id']]) === 'currency_mismatch');
     check('20-min captured => paid', status($fresh['id']) === 'paid');
     check('20-min captured => access code issued', (int) val("SELECT COUNT(*) FROM access_codes WHERE order_id = ? AND status = 'active'", [$fresh['id']]) === 1);
     check('captured payment id recorded', val('SELECT razorpay_payment_id FROM payments WHERE order_id = ?', [$fresh['id']]) === "pay_{$tag}f1");

@@ -129,6 +129,19 @@ try {
     check('new order snapshots 40.00', val('SELECT amount FROM commissions WHERE order_id = ?', [$h2['id']]) === '40.00');
     check('older order stays 25.00', val('SELECT amount FROM commissions WHERE order_id = ?', [$h['id']]) === '25.00');
 
+    // currency mismatch (right amount, wrong or missing currency): flagged like an amount mismatch, never paid
+    foreach (['USD' => 'curf', 'inr' => 'curg', null => 'curh'] as $cur => $suffix) {
+        $c = mkOrder('digital', $partnerId);
+        $label = var_export($cur === '' ? null : $cur, true);
+        check("currency $label -> amount_mismatch, pending, flag currency_mismatch, no commission/code",
+            OrderFulfillment::markPaid($c['rzp'], 'pay_' . $tag . $suffix, 49900, ['currency' => $cur], $cur === '' ? null : $cur) === 'amount_mismatch'
+            && status($c['id']) === 'pending' && val('SELECT admin_flag FROM orders WHERE id = ?', [$c['id']]) === 'currency_mismatch'
+            && commissions($c['id']) === 0 && val('SELECT status FROM payments WHERE order_id = ?', [$c['id']]) === 'created'
+            && (int) val('SELECT COUNT(*) FROM access_codes WHERE order_id = ?', [$c['id']]) === 0);
+    }
+    $c = mkOrder('digital', null);
+    check('currency INR -> paid', OrderFulfillment::markPaid($c['rzp'], 'pay_' . $tag . 'curi', 49900, ['currency' => 'INR'], 'INR') === 'paid');
+
     // amount mismatch
     $m = mkOrder('digital', $partnerId);
     check('mismatch returns amount_mismatch', OrderFulfillment::markPaid($m['rzp'], 'pay_' . $tag . 'e', 100) === 'amount_mismatch');

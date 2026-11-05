@@ -62,7 +62,7 @@ class OrderController
         $code = 200;
         switch ($payment['status'] ?? null) {
             case 'captured':
-                $result = OrderFulfillment::markPaid($rzpOrderId, $paymentId, (int) $payment['amount'], $payment);
+                $result = OrderFulfillment::markPaid($rzpOrderId, $paymentId, (int) $payment['amount'], $payment, is_string($payment['currency'] ?? null) ? $payment['currency'] : null);
                 if ($result === 'amount_mismatch') {
                     throw new ApiException('Payment could not be confirmed; support has been notified', 409, 'payment_amount_mismatch');
                 }

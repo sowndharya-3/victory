@@ -235,7 +235,9 @@ not discovered by the cron (no account-wide refund listing yet): reconcile those
 
 An order flagged `admin_flag = amount_mismatch` (captured amount differs from the
 order) stays `pending` and is re-polled every run until an admin resolves it. `admin_flag` values (shown as the
-`adminFlag` badge in the admin order list and detail): `amount_mismatch`, `duplicate_payment`, `refund_external_unmatched`.
+`adminFlag` badge in the admin order list and detail): `amount_mismatch`, `currency_mismatch` (the captured payment's
+currency is not INR, or missing: verify, webhook and cron all pass the gateway's `currency`; treated like an amount
+mismatch, never paid), `duplicate_payment`, `refund_external_unmatched`.
 A flag is never overwritten; later events only add audit rows.
 
 Run it every 15 minutes, with `flock -n` so a slow run is never overlapped:

@@ -12,8 +12,15 @@ use PDOException;
 /** The single paid/failed path: verify endpoint, webhook and any reconciliation all route through here. */
 class OrderFulfillment
 {
-    /** @return 'paid'|'already_paid'|'amount_mismatch'|'unknown_order' */
-    public static function markPaid(string $razorpayOrderId, string $razorpayPaymentId, int $capturedPaise, array $rawPayment = []): string
+    /** Every order and Razorpay order is created in INR (OrderService). */
+    public const CURRENCY = 'INR';
+
+    /**
+     * $currency is the gateway payment's currency: production callers pass the payment entity's `currency` (null when
+     * absent); anything other than INR is treated like an amount mismatch (flagged, not paid). Tests may omit it.
+     * @return 'paid'|'already_paid'|'amount_mismatch'|'unknown_order' ('amount_mismatch' also covers a currency mismatch)
+     */
+    public static function markPaid(string $razorpayOrderId, string $razorpayPaymentId, int $capturedPaise, array $rawPayment = [], ?string $currency = self::CURRENCY): string
     {
         $db = Db::connection();
         $db->beginTransaction();
@@ -27,6 +34,11 @@ class OrderFulfillment
             if (in_array($row['status'], ['paid', 'refunded'], true)) {
                 $db->rollBack();
                 return 'already_paid';
+            }
+            if ($currency !== self::CURRENCY) {
+                $db->prepare("UPDATE orders SET admin_flag = 'currency_mismatch' WHERE id = ?")->execute([$row['id']]);
+                $db->commit();
+                return 'amount_mismatch';
             }
             if ($capturedPaise !== Money::toPaise($row['pay_amount'])) {
                 $db->prepare("UPDATE orders SET admin_flag = 'amount_mismatch' WHERE id = ?")->execute([$row['id']]);
