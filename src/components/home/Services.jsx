@@ -129,8 +129,8 @@ const services = [
     ],
   },
   {
-    title: '11. Sale of Victory Today Publication – Books (10-20% Referral Commission will be given)',
-    tamil: 'விக்டரி டுடே பதிப்பகம் – புத்தக விற்பனை (10-20% குறிப்பு கமிஷன் வழங்கப்படும்)',
+    title: '11. Sale of Victory Today Publication – Books (Referral commission: ₹25 per sale)',
+    tamil: 'விக்டரி டுடே பதிப்பகம் – புத்தக விற்பனை (குறிப்பு கமிஷன்: ஒரு விற்பனைக்கு ₹25)',
     description: 'Victory Today Publications - Books for educational and awareness purposes:',
     items: [
       'Sexual Harassment in Educational Institution: Awareness and Prevention – English and Tamil',

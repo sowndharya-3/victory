@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom'
+
 function openOfficeMap() {
   const address = '14/13, TNHB Lake View Apartments, Sholinganallur, Chennai-600 119'
   const encodedAddress = encodeURIComponent(address)
@@ -31,13 +33,6 @@ function Footer() {
               <h3>Victory Today</h3>
               <p className="tamil">விடாமுயற்சி - தொடர் பயிற்சி - வெற்றி நிச்சயம்</p>
               <p>Providing world-class educational services with personalized approach and professional ethics.</p>
-              <div className="social-links">
-                <a href="#" className="social-icon"><i className="fab fa-facebook-f"></i></a>
-                <a href="#" className="social-icon"><i className="fab fa-x-twitter"></i></a>
-                <a href="#" className="social-icon"><i className="fab fa-instagram"></i></a>
-                <a href="#" className="social-icon"><i className="fab fa-linkedin-in"></i></a>
-                <a href="#" className="social-icon"><i className="fab fa-whatsapp"></i></a>
-              </div>
             </div>
 
             <div className="footer-col fade-in" style={{ transitionDelay: '0.1s' }}>
@@ -92,7 +87,9 @@ function Footer() {
 
           <div className="copyright fade-in">
             <p>&copy; 2025 Victory Today Educational Enterprises. All Rights Reserved.</p>
-            <p>THIS IS AN CHANGES IN SERVICES</p>
+            <p className="policy-links">
+              <Link to="/terms">Terms and Conditions</Link> | <Link to="/privacy">Privacy Policy</Link> | <Link to="/refund-policy">Cancellation &amp; Refund Policy</Link> | <Link to="/digital-access">Digital Book Access Policy</Link>
+            </p>
           </div>
         </div>
       </footer>
