@@ -179,6 +179,23 @@ try {
     q("UPDATE orders SET status = 'refunded' WHERE id = ?", [cm($gone)['order_id']]);
     check('order no longer paid blocks markPayable -> refund_open', str_starts_with(attempt(fn () => CommissionService::markPayable($gone, $ADMIN)), 'refund_open|409|'));
 
+    // --- clawback settlement (migration 009) ---
+    $cb = paidReferralOrder('digital');
+    check('settle clawback without clawback_due -> invalid_transition 400', str_starts_with(attempt(fn () => CommissionService::settleClawback($cb, $ADMIN, 'UPI-REC-1')), 'invalid_transition|400|'));
+    q("UPDATE commissions SET status = 'paid', paid_at = NOW(), payout_reference = 'UPI-1', clawback_due = 1 WHERE id = ?", [$cb]);
+    check('clawback due: clawbackDue true, clawbackSettled false', CommissionService::find($cb)['clawbackDue'] === true && CommissionService::find($cb)['clawbackSettled'] === false);
+    foreach (['', '   ', str_repeat('x', 101), "bad
+ref", '-lead'] as $bad) {
+        check('settle clawback rejects reference ' . json_encode($bad), str_starts_with(attempt(fn () => CommissionService::settleClawback($cb, $ADMIN, $bad)), 'validation_error|400|{"reference"'));
+    }
+    check('settle unknown commission -> not_found', str_starts_with(attempt(fn () => CommissionService::settleClawback(0, $ADMIN, 'X1')), 'not_found|404|'));
+    $settled = CommissionService::settleClawback($cb, $ADMIN, '  UPI-REC-1  ');
+    check('settle clawback -> clawbackSettled, reference trimmed, no longer due, status stays paid, clawback_due kept',
+        $settled['clawbackSettled'] === true && $settled['clawbackDue'] === false && $settled['clawbackReference'] === 'UPI-REC-1' && $settled['clawbackSettledAt'] !== null
+        && $settled['status'] === 'paid' && (int) cm($cb)['clawback_due'] === 1);
+    check('settle clawback audited once', (int) val("SELECT COUNT(*) FROM audit_logs WHERE action = 'commission.clawback_settled' AND entity_type = 'commission' AND entity_id = ? AND admin_id = ? AND JSON_UNQUOTE(JSON_EXTRACT(detail, '$.reference')) = 'UPI-REC-1'", [$cb, $ADMIN]) === 1);
+    check('settle twice -> invalid_transition, reference unchanged', str_starts_with(attempt(fn () => CommissionService::settleClawback($cb, $ADMIN, 'OTHER')), 'invalid_transition|400|') && cm($cb)['clawback_reference'] === 'UPI-REC-1');
+
     // --- migration 008: one partner per normalised gmail, one open application per gmail ---
     $dupErr = function (string $sql, array $p): ?\PDOException {
         try {

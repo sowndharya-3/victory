@@ -1120,6 +1120,14 @@ check "refunded order: commission reversed; reversed -> payable 400 invalid_tran
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/999999999/payable" ''
 get_json "$ADMIN_TOKEN" "/api/admin/commissions?partnerId=$PID1"
 check "unknown commission 404; totals paid 25.00 / reversed 30.00" "$([ "$PCODE" = "404" ] && jh "$G" '"paid":\{"count":1,"amount":"25\.00"\}' && jh "$G" '"reversed":\{"count":1,"amount":"30\.00"\}' && echo true || echo false)"
+# Clawback settlement (paid commission whose order was refunded later; clawback_due set directly here)
+post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/clawback-settled" '{"reference":"REC-1"}'; S1=$PCODE
+sql "UPDATE commissions SET clawback_due=1 WHERE id=$C1;"
+get_json "$ADMIN_TOKEN" "/api/admin/commissions?partnerId=$PID1"; G1=$G
+post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/clawback-settled" '{}'; S2="$PCODE $(jh "$P" '"fields":\{"reference"' && echo y)"
+post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/clawback-settled" '{"reference":" REC-77 "}'
+get_json "$ADMIN_TOKEN" "/api/admin/commissions?partnerId=$PID1"
+check "clawback-settled: 400 when nothing due / no reference; then 200 settled, totals move from due to settled" "$([ "$S1" = "400" ] && [ "$S2" = "400 y" ] && jh "$G1" '"clawbackDue":\{"count":1,"amount":"25\.00"\}' && [ "$PCODE" = "200" ] && jh "$P" '"clawbackDue":false,"clawbackSettled":true,"clawbackSettledAt":"[0-9]' && jh "$P" '"clawbackReference":"REC-77"' && jh "$G" '"clawbackDue":\{"count":0,"amount":"0\.00"\},"clawbackSettled":\{"count":1,"amount":"25\.00"\}' && [ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE action='commission.clawback_settled' AND entity_id=$C1")" = "1" ] && echo true || echo false)"
 
 # Pricing settings (U1/U2 configurable, validated)
 get_json "$ADMIN_TOKEN" "/api/admin/settings/pricing"

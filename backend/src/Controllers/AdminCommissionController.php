@@ -59,10 +59,14 @@ class AdminCommissionController
         foreach ($t->fetchAll() as $r) {
             $totals[$r['status']] = ['count' => (int) $r['n'], 'amount' => Money::fromPaise(Money::toPaise((string) $r['total']))];
         }
-        $c = $db->prepare('SELECT COUNT(*) AS n, COALESCE(SUM(c.amount), 0) AS total FROM commissions c' . ($partnerWhere === '' ? ' WHERE' : $partnerWhere . ' AND') . ' c.clawback_due = 1');
+        $c = $db->prepare('SELECT COUNT(*) AS n, COALESCE(SUM(c.amount), 0) AS total FROM commissions c' . ($partnerWhere === '' ? ' WHERE' : $partnerWhere . ' AND') . ' c.clawback_due = 1 AND c.clawback_settled_at IS NULL');
         $c->execute($partnerParams);
         $claw = $c->fetch();
         $totals['clawbackDue'] = ['count' => (int) $claw['n'], 'amount' => Money::fromPaise(Money::toPaise((string) $claw['total']))];
+        $c = $db->prepare('SELECT COUNT(*) AS n, COALESCE(SUM(c.amount), 0) AS total FROM commissions c' . ($partnerWhere === '' ? ' WHERE' : $partnerWhere . ' AND') . ' c.clawback_settled_at IS NOT NULL');
+        $c->execute($partnerParams);
+        $claw = $c->fetch();
+        $totals['clawbackSettled'] = ['count' => (int) $claw['n'], 'amount' => Money::fromPaise(Money::toPaise((string) $claw['total']))];
 
         echo json_encode([
             'items' => array_map([CommissionService::class, 'format'], $stmt->fetchAll()),
@@ -82,6 +86,13 @@ class AdminCommissionController
         $admin = AuthMiddleware::requireRole(['admin']);
         $ref = AdminOrderController::body()['payoutReference'] ?? '';
         echo json_encode(CommissionService::markPaid(AdminOrderController::id($id), (int) $admin['sub'], is_string($ref) ? $ref : ''));
+    }
+
+    public function clawbackSettled(string $id): void
+    {
+        $admin = AuthMiddleware::requireRole(['admin']);
+        $ref = AdminOrderController::body()['reference'] ?? '';
+        echo json_encode(CommissionService::settleClawback(AdminOrderController::id($id), (int) $admin['sub'], is_string($ref) ? $ref : ''));
     }
 
     public function commissionSettings(): void

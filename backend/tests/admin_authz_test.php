@@ -64,6 +64,7 @@ foreach ([
     'PUT /api/admin/settings/commission',
     'GET /api/admin/settings/pricing',
     'PUT /api/admin/settings/pricing',
+    'POST /api/admin/commissions/{id}/clawback-settled',
 ] as $route) {
     check("route registered: $route", in_array($route, $registered, true));
 }

@@ -97,6 +97,7 @@ $adminCommissions = new AdminCommissionController();
 $router->get('/api/admin/commissions', [$adminCommissions, 'list']);
 $router->post('/api/admin/commissions/{id}/payable', [$adminCommissions, 'payable']);
 $router->post('/api/admin/commissions/{id}/paid', [$adminCommissions, 'paid']);
+$router->post('/api/admin/commissions/{id}/clawback-settled', [$adminCommissions, 'clawbackSettled']);
 $router->get('/api/admin/settings/commission', [$adminCommissions, 'commissionSettings']);
 $router->put('/api/admin/settings/commission', [$adminCommissions, 'saveCommissionSettings']);
 $router->get('/api/admin/settings/pricing', [$adminCommissions, 'pricingSettings']);
