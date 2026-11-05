@@ -42,7 +42,7 @@ test('adding a book calls createBook and reloads the list', async () => {
 
 test('editing a book saves the title and description', async () => {
   vi.spyOn(booksApi, 'fetchAdminBooks').mockResolvedValue([
-    { id: 4, title: 'Old Title', description: 'Old text', published: true, archived: false, hasCover: false, hasIndex: false, hasPdf: false, previewPageCount: 0 },
+    { id: 4, title: 'Old Title', description: 'Old text', category: null, onlinePrice: 10, hardcopyPrice: 20, published: true, archived: false, hasCover: false, hasIndex: false, hasPdf: false, previewPageCount: 0 },
   ])
   const updateSpy = vi.spyOn(booksApi, 'updateBook').mockResolvedValue({})
 
@@ -54,7 +54,7 @@ test('editing a book saves the title and description', async () => {
   fireEvent.change(screen.getByLabelText(/edit description/i), { target: { value: 'New text' } })
   fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
 
-  await waitFor(() => expect(updateSpy).toHaveBeenCalledWith('fake-admin-token', 4, { title: 'Old Title', description: 'New text' }))
+  await waitFor(() => expect(updateSpy).toHaveBeenCalledWith('fake-admin-token', 4, { title: 'Old Title', description: 'New text', category: null, onlinePrice: '10', hardcopyPrice: '20' }))
 })
 
 test('publish button calls publishBook and reloads', async () => {
@@ -73,4 +73,32 @@ test('publish button calls publishBook and reloads', async () => {
     expect(row).toHaveTextContent('Published')
   })
   expect(publishSpy).toHaveBeenCalledWith('fake-admin-token', 3)
+})
+
+const bk = (over = {}) => ({ id: 1, title: 'B', description: '', category: 'Math', onlinePrice: 100, hardcopyPrice: 200, published: false, archived: false, hasCover: false, hasIndex: false, hasPdf: false, previewPageCount: 0, ...over })
+
+test('edit saves category and prices as strings, empty category clears', async () => {
+  vi.spyOn(booksApi, 'fetchAdminBooks').mockResolvedValue([bk()])
+  const upd = vi.spyOn(booksApi, 'updateBook').mockResolvedValue(bk())
+  render(<AdminBooksPage />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+  expect(screen.getByLabelText('Category')).toHaveValue('Math')
+  fireEvent.change(screen.getByLabelText('Category'), { target: { value: '' } })
+  fireEvent.change(screen.getByLabelText('Edit Online Price'), { target: { value: '199.50' } })
+  fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+  await waitFor(() => expect(upd).toHaveBeenCalledWith('fake-admin-token', 1, { title: 'B', description: '', category: null, onlinePrice: '199.50', hardcopyPrice: '200' }))
+})
+
+test('edit rejects price below 1 client-side and shows server field errors inline', async () => {
+  vi.spyOn(booksApi, 'fetchAdminBooks').mockResolvedValue([bk({ published: true })])
+  const upd = vi.spyOn(booksApi, 'updateBook').mockRejectedValue(Object.assign(new Error('Validation failed'), { fields: { category: 'At most 100 characters' } }))
+  render(<AdminBooksPage />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+  fireEvent.change(screen.getByLabelText('Edit Hard Copy Price'), { target: { value: '0.5' } })
+  fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+  expect(screen.getByText(/at least 1/i)).toBeInTheDocument()
+  expect(upd).not.toHaveBeenCalled()
+  fireEvent.change(screen.getByLabelText('Edit Hard Copy Price'), { target: { value: '5' } })
+  fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+  expect(await screen.findByText('At most 100 characters')).toBeInTheDocument()
 })
