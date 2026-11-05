@@ -22,6 +22,17 @@ full design.
    fresh deploy won't have them yet, and this codebase can't create them for
    itself if the process lacks permission to do so.
 
+### Security headers (nginx)
+
+`backend/nginx/default.conf` adds to every PHP (API) response `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer`, `Cache-Control: no-store` and `Content-Security-Policy: default-src 'none';
+frame-ancestors 'none'`. Cache-Control and nosniff are defaults only (nginx `map` on the upstream header), so the reader
+page keeps its own `private, no-store` and nothing is sent twice; the public book list was never cacheable and is
+`no-store` too. `/uploads/` (covers, previews, the index PDF the frontend frames) gets nosniff and no-referrer only,
+never `X-Frame-Options`/`frame-ancestors`. `server_tokens off`, `X-Powered-By` hidden. HSTS is present but commented:
+enable it only once HTTPS works on that host (or on the TLS proxy), starting at `max-age=300`. The Apache `.htaccess`
+does not add these headers.
+
 ### Apache hosting
 
 The recommended API host is a VPS running this Docker/nginx stack. For Apache/LiteSpeed (document root =

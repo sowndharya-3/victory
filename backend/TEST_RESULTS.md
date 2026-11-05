@@ -289,3 +289,33 @@ admin 5/account, per-IP buckets, unknown accounts identical, buckets separate, s
 Leftovers removed (book_test books 225/238/253 with their storage/upload dirs, 6 book_test/http_test users); older
 archived SP-4 leftovers kept. `/api/books`, `/api/books/1`, `/api/books/2` and both private PDFs md5-identical to the
 start of the session; settings unchanged.
+
+## SP-5 finalize (branch `sp5-finalize`): apache auth, client IP, book validation, headers, refund reconcile, PHP 8.4, currency, clawbacks
+
+Run date: 2026-11-05, one full pass after the last task, image `php:8.4-fpm-trixie` (PHP 8.4.27, Debian 13.7,
+poppler-utils 25.03), `mysql:8.0`, migration 009 applied in place, `APP_ENV=development`, `RAZORPAY_GATEWAY=fake`.
+Every PHP suite run with `-d error_reporting=E_ALL -d display_errors=1`: zero deprecations/warnings; php-fpm log clean;
+`php -l` clean on every backend PHP file (8.4).
+
+| Suite | Before (8.2, 2026-10-31) | Now (8.4) |
+|---|---|---|
+| order_test.sh | 290 | 298 (+X-Forwarded-For spoof on track, API/uploads/reader headers, external and partial refund.processed flagged, currency USD/missing flagged, clawback-settled over HTTP) |
+| book_test.sh | 25 | 52 (update validation: 19 rejected bodies, admin edit path, price 0 publish refused, price audit, category set/clear) |
+| http_test.sh | 23 | 23 |
+| admin_authz | 99 | 102 (clawback-settled route) |
+| refund | 69 | 87 (refund reconciliation, external refund flag, payout hold on failed-without-id) |
+| commission | 53 | 66 (failed-without-id hold, clawback settlement) |
+| order_fulfillment | 27 | 31 (currency) |
+| reconciler | 25 | 26 (currency) |
+| middleware | 5 | 14 (Authorization header sources) |
+| client_ip (new) | - | 32 |
+| codes 60, reader 55, signature_gateway 54, money_pricing 14, address_validator 14, jwt 6, upload_validator 3, race 1 | same | same |
+
+`scripts/check_config.php` with the dev env: exit 0 (WARN for dev APP_ENV, fake gateway, short DB_PASS, http origin; INFO
+TRUSTED_PROXIES empty; migrations 001-009 PASS). `scripts/reconcile_orders.php`: `paid=0 cancelled=0 errors=0 purged=0
+refunds_finalised=0 refunds_failed=0 refunds_flagged=0`, exit 0. `.htaccess` checked on a throwaway `httpd:2.4-alpine`
+(book.pdf/pages/dot-files/stray PHP 404, static cover served, everything else to index.php; Authorization pass-through
+not testable without PHP there).
+
+Leftovers removed: book_test books 254-314 (13, with upload/storage dirs and audit rows), 10 book_test/http_test users,
+rate_limits. `/api/books`, `/api/books/1`, `/api/books/2` and both private PDFs md5-identical to the session start.
