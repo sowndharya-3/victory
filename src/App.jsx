@@ -22,6 +22,8 @@ import AdminReferralsPage from './pages/admin/AdminReferralsPage'
 import AdminCommissionsPage from './pages/admin/AdminCommissionsPage'
 import AdminRefundsPage from './pages/admin/AdminRefundsPage'
 import AdminSettingsPage from './pages/admin/AdminSettingsPage'
+import PolicyPage from './pages/PolicyPage'
+import { POLICIES } from './content/policies'
 import Header from './components/home/Header'
 import Footer from './components/home/Footer'
 
@@ -71,6 +73,7 @@ function App() {
             <Route path="commissions" element={<AdminCommissionsPage />} />
             <Route path="settings" element={<AdminSettingsPage />} />
           </Route>
+          {POLICIES.map(p => <Route key={p.path} path={p.path} element={<PolicyPage policy={p} />} />)}
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
