@@ -319,3 +319,32 @@ not testable without PHP there).
 
 Leftovers removed: book_test books 254-314 (13, with upload/storage dirs and audit rows), 10 book_test/http_test users,
 rate_limits. `/api/books`, `/api/books/1`, `/api/books/2` and both private PDFs md5-identical to the session start.
+
+## Owner decisions pass (2026-11-05/06): no customer refunds, no payout hold, contact API
+
+PHP 8.4.27, Docker stack, one full run after the last code change:
+
+| Suite | Result |
+|---|---|
+| address_validator / admin_authz / client_ip / codes | 14 / 99 / 32 / 60 passed |
+| commission (hold tests replaced by "no hold" tests, clawback settlement removed) | 50 passed |
+| contact (new: validation, honeypot, header injection, SMTP client vs scripted peer, rate limit, 502, log hygiene) | 39 passed |
+| jwt / middleware / money_pricing / order_fulfillment / race | 6 / 14 / 14 / 31 / 1 passed |
+| reader / reconciler / refund / signature_gateway / upload_validator | 55 / 26 / 77 / 54 / 3 passed |
+| http_test.sh / book_test.sh / order_test.sh | 23 / 52 / 289 passed |
+| scripts/check_config.php | all required checks passed (mail items WARN in dev) |
+
+All 0 failed. order_test.sh now asserts the customer `refund-request` route is 404 for everyone and seeds legacy
+`requested` refunds by SQL; the commission hold and clawback-settled checks were removed.
+
+Migrations (empty scratch database `vtee_scratch_rb`, dropped afterwards): 001 to 008 apply from scratch and give the
+same schema on a second run. Each block of `migrations/ROLLBACK.md` was run newest first (008 down to 001); after each
+one the schema (columns, indexes, foreign keys) equalled a fresh 001..N-1 database, ending with no tables; 008 re-applied
+cleanly after its rollback. The test caught a bug in the first 003 rollback (error 1553, FK index) which is fixed in the file.
+
+Contact API real delivery (mailpit on the compose network, scratch override outside the repo): HTTP 200, one message
+received with From `noreply@vtee.test`, To `admin@vtee.test`, Reply-To `Asha K <asha@example.com>`, subject
+`[Website enquiry] Bulk order - Asha K`; honeypot sent nothing; the 6th submission got 429 with `Retry-After: 3600`; a dead
+SMTP port gave 502 `email_failed`. Authorization header: `curl /api/me -H "Authorization: Bearer x"` through nginx/FPM
+answers `invalid_token` (not `unauthorized`); `public/.htaccess` and the REDIRECT_HTTP_AUTHORIZATION path are covered by middleware_test.
+

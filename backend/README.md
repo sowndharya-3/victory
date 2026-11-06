@@ -97,6 +97,7 @@ volume to re-run them. On an existing database, back up first and run the read-o
 `backend/scripts/premigration_checks.sql` (every query must return no rows: duplicate
 Razorpay ids that 003's unique keys would reject, duplicate partner / open-application
 emails that 008 would reject, orphan rows); fix the data before applying.
+Way back: `backend/migrations/ROLLBACK.md` has the rollback SQL for every migration (tested 008 down to 001 on a scratch database).
 
 008 adds `referral_partners.gmail_key` and `referral_applications.open_gmail` (STORED generated
 `LOWER(TRIM(gmail))`, utf8mb4_bin, the latter only while pending/approved) with UNIQUE keys: one partner
