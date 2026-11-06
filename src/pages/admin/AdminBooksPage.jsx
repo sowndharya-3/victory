@@ -10,6 +10,7 @@ function AdminBooksPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
   const [title, setTitle] = useState('')
   const [onlinePrice, setOnlinePrice] = useState('')
   const [hardCopyPrice, setHardCopyPrice] = useState('')
@@ -126,13 +127,14 @@ function AdminBooksPage() {
         <button type="submit" className="btn btn-primary" disabled={busy}>Add Book</button>
       </form>
 
+      <label className="admin-check"><input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} /> Show archived</label>
       <div className="admin-table-wrap">
       <table>
         <thead>
           <tr><th>Title</th><th>Status</th><th>Files</th><th>Actions</th></tr>
         </thead>
         <tbody>
-          {books.map(book => (
+          {books.filter(b => showArchived || !b.archived).map(book => (
             <tr key={book.id}>
               <td>
                 {editingId === book.id ? (
