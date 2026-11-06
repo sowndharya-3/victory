@@ -126,6 +126,7 @@ function AdminBooksPage() {
         <button type="submit" className="btn btn-primary" disabled={busy}>Add Book</button>
       </form>
 
+      <div className="admin-table-wrap">
       <table>
         <thead>
           <tr><th>Title</th><th>Status</th><th>Files</th><th>Actions</th></tr>
@@ -194,6 +195,7 @@ function AdminBooksPage() {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }
