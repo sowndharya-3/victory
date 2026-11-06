@@ -150,14 +150,26 @@ The full checklist with a results table is [SP5-razorpay-test-checklist.md](SP5-
 
 ## 7. Owner decisions and blockers: homepage claims
 
-The unverified "32+ Years Experience" claim and the "30 years in universities + 2 years company experience" text were removed from the homepage. These claims are still on the home page and need business confirmation:
+The unverified "32+ Years Experience" claim and the "30 years in universities + 2 years company experience" text were removed from the homepage. These claims were also removed on the owner's instruction. The business may re-add any of them once it can verify it:
 
 | Claim | Status | Recommendation |
 |---|---|---|
-| "World-class" | Not confirmed | If not verified, remove before production |
-| Retired professors | Not confirmed | If not verified, remove before production |
-| 24x7 availability | Not confirmed | If not verified, remove before production |
-| Free one-to-one counselling | Not confirmed | If not verified, remove before production |
-| Founder titles (Founder Chairman, PhD in Education) | Not confirmed | If not verified, remove before production |
+| "World-class" | Removed | Re-add only after the business verifies it |
+| Retired professors | Removed | Re-add only after the business verifies it |
+| 24x7 availability | Removed | Re-add only after the business verifies it |
+| Free one-to-one counselling | Removed | Re-add only after the business verifies it |
+| Founder titles (Founder Chairman, PhD in Education) | Removed | Re-add only after the business verifies it |
 
 Other blockers: owner approval of the four draft policy pages; `rzp_test_` keys in the staging `.env` before the real test-mode run; owner approval of the dev test data cleanup.
+
+## 8. Hardcopy checkout: information needed before enabling it
+
+Shipping charges and GST are not decided, and none have been assumed. The settings table holds placeholder defaults from migration 003 (shipping 0 for both book types, GST 0 percent, mode `inclusive`). With these defaults checkout would show no shipping and no tax. The owner must supply, before hardcopy checkout is enabled for real customers:
+
+1. Shipping charge for a hardcopy order (a flat amount, or a rule such as by weight or region) and whether digital orders carry any charge.
+2. GST rate for digital books and for printed books, and whether book prices already include GST (`inclusive`) or GST is added on top (`exclusive`).
+3. Whether GST also applies to the shipping charge, and whether GST invoices are required.
+4. The delivery areas served and the delivery time wording, if any is to be shown. No delivery times are promised on the site today.
+5. The courier or couriers used, so admins know what to enter as courier and tracking number.
+
+Until these are provided, keep `shipping_charge_hardcopy`, `shipping_charge_digital`, `gst_percent_digital`, `gst_percent_hardcopy` and `gst_mode` untouched and treat hardcopy checkout as not ready. Values are changed in Admin, Settings.

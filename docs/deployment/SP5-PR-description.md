@@ -1,6 +1,6 @@
 # SP-5 pull request description (draft)
 
-**Base:** `master`. **Head (source branch):** `sp5-finalize` (owner decision). It holds the SP-5 baseline (`93f8384` and earlier) plus the 33 finalization commits listed below (`git log 93f8384..sp5-finalize --oneline`).
+**Base:** `master`. **Head (source branch):** `sp5-finalize` (owner decision). It holds the SP-5 baseline (`93f8384` and earlier) plus the finalization commits listed below (33 implementation commits, the homepage-claims removal, and the documentation commits) (`git log 93f8384..sp5-finalize --oneline`).
 
 **Do not merge or deploy. Live payments are disabled.** Nothing has been pushed or merged by this work.
 
@@ -10,7 +10,7 @@ SP-5 adds orders and Razorpay payments, digital access codes, a secure page-by-p
 
 Not deployed. Not tested against real Razorpay. Live payments must stay disabled until the test-mode checklist passes.
 
-## Finalization commits (33), grouped
+## Finalization commits, grouped
 
 ### Security
 - `74ec72b` production build fails when `VITE_API_URL` is missing
@@ -38,6 +38,7 @@ Not deployed. Not tested against real Razorpay. Live payments must stay disabled
 - `e87b93a` admin clawback UI, removed by `18b6ab4`
 - `426b13f` dead social links and placeholder footer text removed, commission wording aligned
 - `781ab43` four draft policy pages from editable files in `src/content/policies`
+- `d35a64a` unverified homepage claims removed (world-class wording, retired professors, 24x7 support, free one-to-one counselling, founder titles)
 - `d0d6f26` no-refund notice on book page and checkout with required acknowledgement
 - `babf112` contact form sends to the backend API with honeypot, inline errors, honest failure states
 - `6877299` UI matches the backend contact error shape; refund-hold badge dropped
@@ -96,7 +97,7 @@ From `backend/TEST_RESULTS.md` (PHP 8.4.27, Docker stack, `APP_ENV=development`,
 2. Place `rzp_test_` keys in the staging `.env` so the test-mode checklist can run; live keys only at the final production stage.
 3. Confirm shipping charge (U1) and GST (U2) with the accountant and set them in Admin, Settings.
 4. Decide hosting (API on a server with HTTPS, Poppler, cron; frontend host), retention of stored Razorpay payloads, and the SMTP mailbox for the contact form.
-5. Verify or remove the unconfirmed homepage claims (world-class, retired professors, 24x7 availability, free one-to-one counselling, founder titles). Recommendation: if not verified, remove before production.
+5. Re-add a removed homepage claim only after the business verifies it. Removed so far: world-class, retired professors, 24x7 availability, free one-to-one counselling, and the founder titles (Founder Chairman, PhD in Education).
 6. Approve book descriptions and categories.
 7. Approve (or decline) the dev test data cleanup.
 8. Remember when paying partners: payout is manual, there is no hold, and a refunded order's commission stays as it was (audit row `refund.commission_unchanged` lists these).

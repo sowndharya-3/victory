@@ -676,4 +676,4 @@ Refund and cancellation policy is settled by the owner (no general refunds, admi
 
 ## Open owner blockers: homepage claims
 
-"32+ Years Experience" and "30 years in universities + 2 years company experience" were removed. Still on the homepage and awaiting business confirmation: world-class, retired professors, 24x7 availability, free one-to-one counselling, founder titles (Founder Chairman, PhD in Education). Recommendation: if not verified, remove before production.
+"32+ Years Experience" and "30 years in universities + 2 years company experience" were removed. Also removed on the owner's instruction: world-class, retired professors, 24x7 availability, free one-to-one counselling, and the founder titles (Founder Chairman, PhD in Education). Re-add any of them only after the business verifies it.

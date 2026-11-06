@@ -264,7 +264,7 @@ Still open:
 | U7 | Hosting: HTTPS API URL, Poppler install, cron, PHP-FPM workers, supported base image | Not started |
 | - | Review and approval of the four draft policy pages (text in `src/content/policies`) | Draft |
 | - | Approval of book descriptions and categories | Current text on books 1 and 2 |
-| - | Homepage claims awaiting business confirmation: world-class, retired professors, 24x7 availability, free one-to-one counselling, founder titles (Founder Chairman, PhD in Education) | Still on the page. Recommendation: if not verified, remove before production |
+| - | Unverified homepage claims | Removed on the owner's instruction: world-class, retired professors, 24x7 availability, free one-to-one counselling, and the founder titles (Founder Chairman, PhD in Education). The business can re-add any claim it later verifies |
 | - | Transactional email (order confirmation, code, shipping) | Not implemented; nothing is emailed about orders; the UI does not promise email |
 | U8 | Guest checkout | Login required |
 | - | Retention of `payment_events.payload` (personal data) and the privacy text (DPDP Act 2023) | Not decided |
