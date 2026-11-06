@@ -77,7 +77,8 @@ The way back for each migration is `backend/migrations/ROLLBACK.md` (blocks for 
 
 - **Take a `mysqldump` first and keep it.** Every block deletes the columns, tables or rows its migration added: 004 removes every refund row; 003 removes orders' breakdown and fulfilment data, access codes, payment events and the audit log; 002 removes preview pages and archive flags.
 - Stop the API before rolling back, and roll back strictly newest first; never skip one.
-- There is no migration 009. The clawback-settlement migration was removed before release. If a database somewhere ran it, `ROLLBACK.md` has the two-column drop.
+- There is no migration 009. The clawback-settlement migration was removed before release. Refunds do not reverse or claw back commissions, so `commissions.clawback_due` and `reversed` rows should not exist; a database restore needs no commission fix-up. If a database somewhere ran it, `ROLLBACK.md` has the two-column drop.
+- Dev test data cleanup is pending owner approval; a backup of the dev database exists outside the repository (never commit it or its credentials).
 - Prefer restoring the pre-migration dump over running rollback blocks when the migration was applied minutes ago and no customer data has been written since.
 
 ## 6. What NOT to roll back once live payments exist

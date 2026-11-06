@@ -14,7 +14,7 @@ The rest of this file is the original investigation and design, kept for the rea
 | 4. Proxy-aware rate limiting | **Built.** `TRUSTED_PROXIES` plus IPv6 /64 grouping (`App\Support\ClientIp`); the nginx `set_real_ip_from` route is still preferred. |
 | 5. Hosting | **Not started** (a separate final stage). The code runs on PHP 8.4. See [SP5-environments.md](SP5-environments.md). |
 
-Owner decisions that overrule parts of this file: no general refunds and no customer refund-request workflow (the customer route was removed, so the "customer refund request" references below are historical); genuine exceptions are refunded manually by an admin; commission is Rs 25 online + Rs 25 hard copy with **no hold period** and **no clawback or settlement rules** (the payout hold described in 1.1 was removed). The decisions D1-D10 referred to at the end are answered and closed.
+Owner decisions that overrule parts of this file: no general refunds and no customer refund-request workflow (the customer route was removed, so the "customer refund request" references below are historical); genuine exceptions are refunded manually by an admin; commission is Rs 25 online + Rs 25 hard copy with **no hold period** and **no clawback, reversal or settlement rules** (the payout hold described in 1.1 was removed). Admin-approved exception refunds do NOT reverse or claw back commission: statuses stay as they were and finalising a refund writes audit row `refund.commission_unchanged`. `clawback_due` is a legacy column that nothing sets or shows; the `reversed` status and columns stay unused; there is no migration 009 and no commission hold. Later decisions: `sp5-finalize` is the PR head (base `master`); contact enquiries are email only (not stored); policy pages stay drafts; live Razorpay credentials are reserved for the final production stage; the admin "clear flag" action is not being built (see [SP5-flag-cleanup-plan.md](SP5-flag-cleanup-plan.md)). Wherever the sections below say a refund "reverses" a commission, or propose a commission hold or a `source` column in a migration, that is historical design text and is NOT built. The decisions D1-D10 referred to at the end are answered and closed.
 
 All `file:line` references are relative to the repo root. Note that the scripts live in `backend/scripts/`, not in a top-level `scripts/` folder.
 
@@ -26,7 +26,7 @@ All `file:line` references are relative to the repo root. Note that the scripts 
 Terms used throughout:
 - **Webhook.** A message that Razorpay's server sends to our API when something happens, such as "refund processed".
 - **Reconciler.** The cron script `backend/scripts/reconcile_orders.php`, run every 15 minutes. It asks Razorpay for the truth and repairs our database.
-- **Finalise.** `RefundService::finalise()`, the single place that marks a refund done. It sets the order and payment to `refunded`, revokes digital access or cancels an unshipped hard copy, and reverses the commission.
+- **Finalise.** `RefundService::finalise()`, the single place that marks a refund done. It sets the order and payment to `refunded`, revokes digital access or cancels an unshipped hard copy. It leaves the commission untouched (audit row `refund.commission_unchanged`).
 - **`admin_flag`.** A free-text column on `orders` that the admin order list shows as a badge (`src/pages/admin/AdminOrdersPage.jsx:64`). The code uses it today for `duplicate_payment` and `amount_mismatch`.
 
 ---
@@ -52,8 +52,8 @@ Terms used throughout:
 
 | # | Scenario | What happens today (order / access / commission) | How an admin would notice | Severity |
 |---|---|---|---|---|
-| a1 | `refund.processed` lost or late, and Razorpay first answered `pending` (our row is `processing`) | Order stays `paid`, reader and code stay live, commission held (not reversed, not payable). A late webhook fixes everything; a lost one never does. | Admin, Refunds, filter "processing" (`src/pages/admin/AdminRefundsPage.jsx:5,78`) shows it forever. No button can act on it (`:12` allows approve only for requested/approved/failed). | **Medium**. Customer has money and book; nothing is paid out wrongly. |
-| a2 | Gateway call timed out but Razorpay *did* refund (row `failed`, no refund id), and the webhook is lost | Order `paid`, access live, and the commission is **not held**, so it can be marked payable and paid. If the admin clicks Approve again, Razorpay refuses a second full refund (verify on test mode), so the row goes back to `failed` with a 502. | A `failed` row in Refunds plus a processed refund in the Razorpay dashboard. Confusing: the admin is told to retry and the retry keeps failing. | **Medium-High**: wrong commission payout possible. |
+| a1 | `refund.processed` lost or late, and Razorpay first answered `pending` (our row is `processing`) | Order stays `paid`, reader and code stay live, commission unchanged. A late webhook fixes everything; a lost one never does. | Admin, Refunds, filter "processing" (`src/pages/admin/AdminRefundsPage.jsx:5,78`) shows it forever. No button can act on it (`:12` allows approve only for requested/approved/failed). | **Medium**. Customer has money and book; nothing is paid out wrongly. |
+| a2 | Gateway call timed out but Razorpay *did* refund (row `failed`, no refund id), and the webhook is lost | Order `paid`, access live, and the commission is unchanged and can be marked payable and paid (by decision, refunds never affect commission). If the admin clicks Approve again, Razorpay refuses a second full refund (verify on test mode), so the row goes back to `failed` with a 502. | A `failed` row in Refunds plus a processed refund in the Razorpay dashboard. Confusing: the admin is told to retry and the retry keeps failing. | **Medium-High**: wrong commission payout possible. |
 | b | Refund stuck at Razorpay `pending` (bank slow) | Same as a1 for as long as it stays pending. | Same as a1. How long "pending" lasts in practice: verify on test mode. | **Low-Medium** |
 | c | `refund.failed` arrives after we already finalised (row `refunded`) | `markFailed` refuses (status is not `processing`) and returns false. The webhook answers `ignored` with **no log line** (`RefundService.php:193`, `WebhookController.php:163`). The order stays `refunded` and access stays revoked, though Razorpay says the money went back to the merchant. | Only through the Razorpay dashboard or a customer complaint. The event row is in `payment_events` (`event_type = refund.failed`). | **Low likelihood** (Razorpay normally fails only pending refunds; verify on test mode), **High impact** for that customer (no book and no money). |
 | d-full | Full refund started in the **Razorpay dashboard** for an order the app thinks is `paid` | If the customer had an open `requested` refund (no refund id), the webhook finalises it (`:130-134` with `fromWebhook=true`, allowed at `RefundService.php:225`). That is correct. Otherwise it is logged "unknown refund" and ignored (`WebhookController.php:136-138`): order `paid`, access live, commission payable and payable out. The event is marked processed, so it can never be replayed. | Only by comparing the Razorpay dashboard with the app. The server error log has one line. | **High** (silent; money gone, access and commission continue) |
@@ -96,8 +96,8 @@ Razorpay retries webhooks that do not get a 2xx response for some time, and may 
     1. If the order has an open refund row without a refund id, finalise that row with `fromWebhook=true`. This matches the existing webhook fallback.
     2. Otherwise insert a `refunds` row with status `approved`, `requested_by_user_id` NULL, `reviewed_by_admin_id` NULL, reason `"Refunded outside the app (Razorpay dashboard) rfnd_..."` and `razorpay_refund_id` set. Add an `audit_logs` entry `refund.external`, then finalise.
     3. The unique keys `uq_open_refund` and `uq_refunds_rzp_refund` make a second run or a parallel webhook a no-op. Catch the duplicate-key error (23000) and treat it as "already done".
-    4. Marking the row as external needs no migration: the null admin, the reason text and the audit action identify it. Add a `source` column (migration 009) only if the owner wants reports by origin.
-  - **Partial** (amount below full, or several refunds): set `orders.admin_flag = 'external_partial_refund'` when the flag is NULL; otherwise write an audit entry only, because the code never overwrites a flag (`WebhookController.php:111`). Log it. **Never revoke and never finalise.** Also block commission payout while an `external_*` flag is set (one condition added in `CommissionService.php:141`).
+    4. Marking the row as external needs no migration: the null admin, the reason text and the audit action identify it. Add a `source` column (it would be a new migration; none exists, there is no migration 009) only if the owner wants reports by origin.
+  - **Partial** (amount below full, or several refunds): set `orders.admin_flag = 'external_partial_refund'` when the flag is NULL; otherwise write an audit entry only, because the code never overwrites a flag (`WebhookController.php:111`). Log it. **Never revoke and never finalise.** (The proposal to also block commission payout on `external_*` flags is NOT adopted: no commission hold by owner decision.)
   - **Pending:** do nothing. The next runs see it again while it is younger than 7 days.
 - If the order is already `refunded`, skip it. If the order is `failed`, `cancelled` or `pending`, flag it `external_refund_review` and log it, because this should not happen.
 
@@ -123,14 +123,14 @@ Razorpay retries webhooks that do not get a 2xx response for some time, and may 
 - The cron line should mail or ping on any non-zero exit, for example `MAILTO=` with a wrapper `|| mail ...`, or a free uptime/cron-monitor ping. Admins also see the flag badge in the order list. Add an "Orders with a flag" filter to `AdminOrderController` and `AdminOrdersPage` (small).
 
 **Tests needed** (in `backend/tests/reconciler_test.php` and `refund_test.php`, using an in-test scripted Gateway like the existing pattern):
-1. `processing` to Razorpay `processed`: order refunded, code and `book_access` revoked, commission reversed.
+1. `processing` to Razorpay `processed`: order refunded, code and `book_access` revoked, commission left unchanged.
 2. `processing` to `failed`: row `failed`, nothing else changes.
 3. `processing` and `pending` for 6 days: counted as `stuck`, exit 3.
 4. Timeout `failed` (no id) with a processed refund at Razorpay: finalised, id stored.
 5. `failed` with an id: not queried.
 6. External full on a `paid` order: one refund row created and finalised; a second run changes nothing.
 7. External full while a customer request is open: that request finalised, no second row.
-8. External partial: flag set, access and commission untouched, payout refused with 409.
+8. External partial: flag set, access and commission untouched, payout unaffected (no hold).
 9. Refund for a payment that is not ours: ignored.
 10. `429` from the gateway: pass stops, `errors=1`, exit 2.
 11. Webhook and reconciler on the same refund: finalised once (forced-overlap race test, as in `race_test.php`).
@@ -141,7 +141,7 @@ Razorpay retries webhooks that do not get a 2xx response for some time, and may 
 - new `backend/src/Refunds/RefundReconciler.php`
 - `backend/src/Refunds/RefundService.php` (`recordExternal`)
 - `backend/src/Controllers/WebhookController.php`
-- `backend/src/Referral/CommissionService.php` (hold on `external_*` flags)
+- `backend/src/Referral/CommissionService.php` (no change: no hold by decision)
 - `backend/scripts/reconcile_orders.php` (call, counts, exit 3)
 - `backend/src/Controllers/AdminOrderController.php` and `src/pages/admin/AdminOrdersPage.jsx` (flag filter and labels)
 - tests
@@ -155,7 +155,7 @@ Razorpay retries webhooks that do not get a 2xx response for some time, and may 
 | R1 | 3-4 h |
 | R2 and `recordExternal` | 4-6 h |
 | Webhook changes | 1-2 h |
-| Payout hold and admin filter | 2-3 h |
+| Payout hold and admin filter (NOT built: no hold by decision) | n/a |
 | Tests | 5-7 h |
 | Docs | 1 h |
 | Test-mode run | 2 h |
@@ -667,3 +667,13 @@ Run each item and record the result.
 | 12 | **Go-live check** | Run the 12-step checklist in 5.6 on the real host, together with the Razorpay test-mode checklist (premerge §4). | Eng runs, Owner signs off | 0.5 day |
 
 Refund and cancellation policy is settled by the owner (no general refunds, admin exception refunds only); see the status section. The old options D1-D10 are closed.
+
+---
+
+## Flag cleanup (plan only, nothing built)
+
+`orders.admin_flag` (`refund_external_unmatched`, `duplicate_payment`, `currency_mismatch`, `amount_mismatch`; first flag wins) has no clear action in the app, and the owner decided NOT to build one now. The plan, with the backup-first SQL approach, is in [SP5-flag-cleanup-plan.md](SP5-flag-cleanup-plan.md). `commissions.clawback_due` and the `reversed` status are legacy and unused.
+
+## Open owner blockers: homepage claims
+
+"32+ Years Experience" and "30 years in universities + 2 years company experience" were removed. Still on the homepage and awaiting business confirmation: world-class, retired professors, 24x7 availability, free one-to-one counselling, founder titles (Founder Chairman, PhD in Education). Recommendation: if not verified, remove before production.

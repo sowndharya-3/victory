@@ -2,7 +2,7 @@
 
 Companion to [SP5-handover.md](SP5-handover.md). The handover describes what was built and how to deploy it. This file lists what is still open before production, what the owner must decide, and what can only be verified with real Razorpay test credentials.
 
-**Status:** this review was written on `sp5-orders-codes` and has been updated for the finalization work on `sp5-finalize` (see [SP5-PR-description.md](SP5-PR-description.md); the PR source branch is still to be chosen by the owner). Base branch is `master` (there is no `main`). Not merged, not deployed. **Live payments must stay disabled** until section 4 has been completed with Razorpay test credentials; that run has **not** happened (no test keys exist in the project).
+**Status:** this review was written on `sp5-orders-codes` and has been updated for the 33 finalization commits on `sp5-finalize`, the PR source branch (see [SP5-PR-description.md](SP5-PR-description.md)). Base branch is `master` (there is no `main`). Not merged, not deployed. **Live payments must stay disabled** until section 4 has been completed with Razorpay test credentials; that run has **not** happened (no test keys exist in the project).
 
 Meaning of the columns: *Owner* = a business decision or an account/hosting action. *Eng* = a code or configuration change. *Deploy* = blocks a production deploy. *Follow* = can ship after go-live.
 
@@ -49,7 +49,7 @@ Refund reconciliation for lost webhooks and dashboard refunds (F-1); API securit
 | F-2 | **Watermark limits.** The watermark is a browser overlay. Page images are served clean and are the same for every user, so a buyer can script-download a whole book (rate limit 240 pages per 5 minutes) with no traceable mark. It deters casual sharing only. | Owner (accept, or pay for per-user burned-in marks) + Eng | The design accepted this risk. |
 | F-3 | **Security headers.** *Fixed (Report-Only).* The API sends `Content-Security-Policy: default-src 'none'`, nosniff, `Referrer-Policy: no-referrer` and `Cache-Control: no-store` (nginx config). The static host sends a CSP in **Report-Only** mode, Permissions-Policy, nosniff, Referrer-Policy and X-Frame-Options (`public/_headers`, `public/.htaccess`). Remaining: HSTS only once HTTPS works on the real host; switch the CSP to enforcing after a clean week of reports. Tokens still live in `localStorage`, so an XSS would expose the admin token; the CSP is the main defence. | Eng | HSTS and CSP enforcement at hosting time. |
 | F-4 | Rate limits and proxies. *Fixed in code.* `TRUSTED_PROXIES` (or nginx `set_real_ip_from`) gives the real visitor IP; IPv6 is bucketed per /64. The deployer must still configure one of them if a proxy/CDN sits in front. | Eng + Owner (hosting) | At hosting time. |
-| F-5 | Commission. Decided: Rs 25 online and Rs 25 hard copy, no hold period, no clawback or settlement rules. The `clawback_due` flag from migration 004 is kept as a flag only. Remaining by design: a hard copy cancelled after shipping keeps its commission; a deactivated partner still earns on orders created before deactivation. | Owner decided | None. |
+| F-5 | Commission. Decided: Rs 25 online and Rs 25 hard copy, no hold period. Admin-approved exception refunds do NOT reverse or claw back commission: commission statuses are untouched and finalising a refund writes audit row `refund.commission_unchanged`. `clawback_due` is a legacy column that nothing sets or shows; `reversed` status and columns are unused; no migration 009. Remaining by design: a hard copy cancelled after shipping keeps its commission; a deactivated partner still earns on orders created before deactivation. | Owner decided | None. |
 | F-6 | Duplicate payment on an already-paid order is flagged (`admin_flag`). Per the owner's decision it is a genuine exception: an admin refunds it with "Refund this order" (or from the Razorpay dashboard, which the reconciler then records). | Admin runbook | |
 | F-7 | Transactional email is not implemented: refunds, revocations and shipments are silent to the customer, and the policy text must say status is shown in Account and My Books. The contact form does send mail to the admin (SMTP). | Owner | Follow |
 | F-8 | Customer refund-request screen. *Closed by decision:* there is no customer refund-request workflow; the route was removed. | Owner decided | None. |
@@ -64,7 +64,14 @@ Refund reconciliation for lost webhooks and dashboard refunds (F-1); API securit
 | Topic | Decision |
 |---|---|
 | Refunds | No general refunds for purchased books. No customer refund-request workflow (route removed, no screen). Genuine exceptions (duplicate payment, debited-but-failed, legal cases) are handled manually by an admin with an admin refund. This answers the former questions D1-D10 (windows, redeemed codes, returns, partial refunds, reason list, self-service button, gift recipients): none of those policies is built. |
-| Commission | Rs 25 online + Rs 25 hard copy. No hold period. No clawback or settlement rules. |
+| Commission | Rs 25 online + Rs 25 hard copy. No hold period. Refunds do not reverse or claw back commission (audit row `refund.commission_unchanged`); `clawback_due` is legacy and unused; no migration 009. |
+| PR source | `sp5-finalize` is the PR head, base `master`. |
+| Contact | Enquiries are emailed to the admin only, not stored in the database; failures are shown honestly. |
+| Policy pages | Drafts until business approval. |
+| Razorpay live credentials | Reserved for the final production deployment stage; the real test-mode run waits for `rzp_test_` keys in the staging `.env`. |
+| Flag cleanup | No admin "clear flag" action now; plan in [SP5-flag-cleanup-plan.md](SP5-flag-cleanup-plan.md). |
+| Dev test data | Cleanup pending owner approval (backup kept outside the repository). |
+| Homepage | "32+ Years Experience" and "30 years in universities + 2 years company experience" removed. |
 | Notifications | Order status is shown in Account and My Books; transactional email is not built. The contact form emails the admin. |
 | Hosting | A separate final stage. |
 
@@ -77,7 +84,7 @@ The checkout and book page show a no-refund notice, and checkout requires an ack
 | U1 | Shipping charge per type | Deploy |
 | U2 | GST rate and mode (inclusive or extra); whether the business is GST-registered | Deploy |
 | U3 | Answered (see above): no general refunds | - |
-| U4 | Answered (see above): Rs 25 + Rs 25, no hold, no clawback | - |
+| U4 | Answered (see above): Rs 25 + Rs 25, no hold, no reversal or clawback | - |
 | U5 | Transactional email (not built) | Follow |
 | U6 | Razorpay account, KYC, keys, webhook | Deploy |
 | U7 | Hosting for API and frontend | Deploy (final stage) |
@@ -90,6 +97,8 @@ The checkout and book page show a no-refund notice, and checkout requires an ack
 - An unshipped hard copy can only be cancelled by refunding it (the admin cancel option is refused with `refund_required` for `confirmed`/`processing` orders). Cancelling after shipping (lost parcel) moves no money and leaves the order `paid`.
 - Refunding a shipped hard copy returns the money while the goods stay with the customer; there is no return tracking.
 - Refunding a digital order revokes the code and the reader access it granted, including a gift recipient's access.
+- Refunding an order never changes its commission (no reversal, no clawback); the audit row `refund.commission_unchanged` records the commission id, status and amount. Pay or withhold partner money manually.
+
 - Nobody is notified by email.
 
 ## 4. Razorpay test-mode verification checklist (NOT YET RUN)
@@ -112,7 +121,7 @@ The full checklist with a results table is [SP5-razorpay-test-checklist.md](SP5-
 
 ## 5. Verification not done in a real environment
 
-- Razorpay Checkout popup, real payments, real webhooks, real refunds (section 4).
+- Razorpay Checkout popup, real payments, real webhooks, real refunds (section 4). The real Razorpay popup is NOT TESTED; browser E2E at 1280, 820 and 390 px ran on the fake gateway with a stub checkout.js (evidence kept outside git by the owner).
 - The Apache `.htaccess`, the nginx snippet and Netlify/Cloudflare `_redirects` rules were only imitated by a local test server; follow the post-deploy checklist in [frontend-hosting.md](frontend-hosting.md) on the first deploy.
 - Refund reconciliation (lost `refund.processed`, dashboard refunds) was tested against a scripted gateway only.
 - The contact form was tested against a scripted SMTP peer and a local mail catcher, not a real mail provider.
@@ -138,3 +147,17 @@ The full checklist with a results table is [SP5-razorpay-test-checklist.md](SP5-
 - Encrypted PDFs fail in `pdfinfo` and give `render_failed` (no fixture was available to test this).
 
 **Decision recorded.** Phone, WhatsApp and UPI are deliberately not unique across partners (people can share them); only the email is. Rejected applications may re-apply.
+
+## 7. Owner decisions and blockers: homepage claims
+
+The unverified "32+ Years Experience" claim and the "30 years in universities + 2 years company experience" text were removed from the homepage. These claims are still on the home page and need business confirmation:
+
+| Claim | Status | Recommendation |
+|---|---|---|
+| "World-class" | Not confirmed | If not verified, remove before production |
+| Retired professors | Not confirmed | If not verified, remove before production |
+| 24x7 availability | Not confirmed | If not verified, remove before production |
+| Free one-to-one counselling | Not confirmed | If not verified, remove before production |
+| Founder titles (Founder Chairman, PhD in Education) | Not confirmed | If not verified, remove before production |
+
+Other blockers: owner approval of the four draft policy pages; `rzp_test_` keys in the staging `.env` before the real test-mode run; owner approval of the dev test data cleanup.

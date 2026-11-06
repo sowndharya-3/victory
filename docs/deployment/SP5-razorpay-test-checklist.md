@@ -2,7 +2,7 @@
 
 Purpose: prove, with Razorpay's **test mode** only, that real checkout, server-side payment verification, signature validation, webhooks (including duplicates), refunds and access revocation work end to end. Until every required item below passes and the owner signs off, **live payments stay disabled**.
 
-**Status: NOT RUN.** No Razorpay credentials exist in the project (only development placeholders), so none of the rows below has been executed against real Razorpay, in test or live mode. All earlier tests used the fake gateway (`RAZORPAY_GATEWAY=fake`, development `APP_ENV` only), and Razorpay's checkout popup was replaced by a stub. The results table at the end records this row by row.
+**Status: NOT RUN.** No Razorpay credentials exist in the project (only development placeholders; `rzp_test_` keys are still to be placed in the staging `.env`), so none of the rows below has been executed against real Razorpay, in test or live mode. All earlier tests used the fake gateway (`RAZORPAY_GATEWAY=fake`, development `APP_ENV` only), and Razorpay's checkout popup was replaced by a stub. The results table at the end records this row by row.
 
 **Refund policy context.** There is no customer refund-request workflow and no general refund for purchased books (owner decision). Refunds in this checklist are admin **exception refunds** ("Refund this order"): duplicate payment, debited-but-failed, legal cases.
 
@@ -77,7 +77,7 @@ Run after 5.1 or 5.2 on the digital order that customer A had **redeemed** and r
 | 6.2 | Customer A opens My Books. | The book is gone or marked revoked. | [ ] |
 | 6.3 | Redeem the same code again (as A or as B). | Refused: the code is revoked (`code_revoked`). | [ ] |
 | 6.4 | Admin verifies the code in the code panel. | Status shows `revoked`. | [ ] |
-| 6.5 | If the order carried a referral: open the commission list. | The commission is `reversed` (or `clawback_due` if it had already been paid out). | [ ] |
+| 6.5 | If the order carried a referral: open the commission list. | The commission is unchanged (same status as before; no `reversed`, no `clawback_due`). The audit log has a `refund.commission_unchanged` row for the order. | [ ] |
 | 6.6 | Customer B (who never bought the book) tries to open customer A's reader page URL. | 403; no page image is served. | [ ] |
 
 ## 7. Refund reconciliation (implemented, never tried against real Razorpay)
@@ -86,7 +86,7 @@ Run `php scripts/reconcile_orders.php` after each step (it also runs from cron e
 
 | # | Step | Expected | Notes |
 |---|---|---|---|
-| 7.1 | Refund a paid app order in full **from the Razorpay dashboard**. | The reconciler records it: refund finalised, order `refunded`, access revoked, commission reversed. | Gap F-1 in the premerge review, now implemented. |
+| 7.1 | Refund a paid app order in full **from the Razorpay dashboard**. | The reconciler records it: refund finalised, order `refunded`, access revoked, commission unchanged (audit row `refund.commission_unchanged`). | Gap F-1 in the premerge review, now implemented. |
 | 7.2 | Make a **partial** refund from the dashboard. | Never finalised. The order is flagged for an admin (`admin_flag`); order stays `paid`. | |
 | 7.3 | Lose a `refund.processed` webhook (wrong URL while refunding in the app). | The reconciler finalises the `processing` refund. | |
 
@@ -140,7 +140,7 @@ Date of last update: 2026-11-06. **Every row is "Not run - awaiting rzp_test_ ke
 
 ### What was verified on the fake gateway instead (not a substitute)
 
-The automated suites on the Docker stack (`APP_ENV=development`, `RAZORPAY_GATEWAY=fake`, see `backend/TEST_RESULTS.md`) cover the application logic behind the rows above: signature check and tamper rejection, one payment cannot pay two orders, idempotent verify, webhook signature, duplicate event handling, event id requirement, unknown event types, the order reconciler, exception refunds (full amount, one open refund per order, `refund.processed` and `refund.failed` handling, late webhooks), refund reconciliation against a scripted gateway, access revocation and commission reversal, and the rule that the fake gateway is refused outside development. What the fake gateway cannot show: Razorpay's real Checkout popup, real signatures and payloads, real webhook delivery and retries, real refund timing (`processed` vs `pending`), real fees and settlement.
+The automated suites on the Docker stack (`APP_ENV=development`, `RAZORPAY_GATEWAY=fake`, see `backend/TEST_RESULTS.md`) cover the application logic behind the rows above: signature check and tamper rejection, one payment cannot pay two orders, idempotent verify, webhook signature, duplicate event handling, event id requirement, unknown event types, the order reconciler, exception refunds (full amount, one open refund per order, `refund.processed` and `refund.failed` handling, late webhooks), refund reconciliation against a scripted gateway, access revocation and commission left unchanged, and the rule that the fake gateway is refused outside development. What the fake gateway cannot show: Razorpay's real Checkout popup, real signatures and payloads, real webhook delivery and retries, real refund timing (`processed` vs `pending`), real fees and settlement.
 
 ## 12. Sign-off
 

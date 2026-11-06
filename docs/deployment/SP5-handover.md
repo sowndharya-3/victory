@@ -37,14 +37,16 @@ the known issues; rows marked *Fixed* are resolved on the finalize branch.
   "Refund this order" (full refunds via Razorpay). Legacy `requested` refund rows can still be approved or rejected in
   Admin. A lost `refund.processed` webhook, or a refund made in the Razorpay dashboard, is picked up by the cron
   reconciler. On completion digital access is revoked, hard-copy fulfilment is cancelled if not shipped and the
-  commission is reversed (or flagged `clawback_due` if it was already paid out; the flag is informational only).
+  commission is left exactly as it was (no reversal, no clawback); finalising a refund writes the audit row
+  `refund.commission_unchanged`.
 - **Referral partners**: public application form (`/referral/register`), admin approve/reject (creates `VTP-XXXXXX`
   code), activate/deactivate, edit; flat commission per paid referral order (default ₹25 digital / ₹25 hard copy),
   `pending → payable → paid` with payout reference. No hold period and no payout block while a refund is open
-  (owner decision); no clawback or settlement rules.
+  (owner decision); no clawback, reversal or settlement rules (`clawback_due` is a legacy column that nothing sets or shows; the `reversed` status and columns are unused).
 - **Admin panel** (`/admin`): dashboard, books (now with description editing), customers, orders (search, filters,
   detail, fulfilment, code verify/revoke/reissue, refund), refunds, referral partners, commissions, pricing and
   commission settings. Books: title, description, category and both prices are editable (with field-level errors). Every admin action is written to `audit_logs`.
+- **Navigation and admin UI**: the header has a Track Order link; admin pages use a scoped admin stylesheet; archived books are hidden by default behind a "Show archived" toggle; the mobile menu and admin tables were verified at 390 and 820 px.
 - **Customer account** (`/account`): register/login, order list with fulfilment status, log out.
 - **Contact form** (`POST /api/contact`): the home-page form emails the admin over SMTP (honeypot field, 5 per hour per
   IP, `502 email_failed` if mail cannot be sent, messages are not stored).
@@ -76,7 +78,7 @@ CORS locked to `FRONTEND_ORIGIN`, the marketing home page.
 | 17 Reader backend | Approved; hardening items carried (section 9) |
 | 18 Reader frontend | No refetch / rate-limit burn on fast paging; held-key and single-fetch tests |
 | 19 Admin backend | Code revoke decided under the order lock; cancelling an unshipped paid hard copy requires a refund (409 `refund_required`); control characters rejected in courier/tracking |
-| 20 Partners/commissions | Payout held with 409 `refund_open`; control characters / NBSP / invalid UTF-8 rejected; duplicate partner gmail 409; 16 KB body cap (413) |
+| 20 Partners/commissions | Control characters / NBSP / invalid UTF-8 rejected; duplicate partner gmail 409; 16 KB body cap (413) |
 | 21 Admin frontend | Commission totals rendered; form errors visible app-wide; stale list guard; refund confirm step; full code never shown in search |
 
 ### During this final verification (separate commits on this branch)
@@ -227,7 +229,7 @@ Full detail: `backend/TEST_RESULTS.md` (last section: owner decisions pass, PHP 
   middleware 14, money_pricing 14, order_fulfillment 31, race 1, reader 55, reconciler 26, refund 77,
   signature_gateway 54, upload_validator 3. Shell suites: http_test 23, book_test 52, order_test 289.
   `scripts/check_config.php` exits 0 (mail items WARN in dev).
-- Frontend: `npm test` 191 tests in 34 files, `npm run build` ok (with `VITE_API_URL` set).
+- Frontend: `npm test` 192 tests in 34 files, `npm run build` ok (with `VITE_API_URL` set).
 - Migrations 001-008 applied from scratch and every rollback block run newest first on a scratch database.
 - Earlier real-browser runs (Playwright/Chromium, fake gateway, both real books) passed; the later finalization changes
   were covered by the automated suites above.
@@ -242,8 +244,14 @@ Confirmed by the owner (applied in code; do not treat as open):
 | Topic | Decision |
 |---|---|
 | Refunds | No general refunds for purchased books. No customer refund-request workflow (route and screen removed). Genuine exceptions (duplicate payment, debited-but-failed, legal cases) are handled manually by an admin with an admin refund. This replaces the earlier D1-D10 refund and cancellation options. |
-| Commission | Rs 25 for an online (digital) order and Rs 25 for a hard-copy order. No hold period. No clawback or settlement rules (the legacy `clawback_due` flag from migration 004 stays as a flag only). |
-| Contact | The contact form emails the admin (`POST /api/contact`); messages are not stored. |
+| Commission | Rs 25 for an online (digital) order and Rs 25 for a hard-copy order. No hold period. Admin-approved exception refunds do not reverse or claw back commission: commission statuses are untouched and an audit row `refund.commission_unchanged` is written. `clawback_due` (migration 004) is a legacy column that nothing sets or shows; `reversed` status and columns stay unused. No migration 009. |
+| Contact | The contact form emails the admin (`POST /api/contact`); enquiries are not stored in the database (email only) and a delivery failure is shown honestly to the visitor. |
+| PR source | `sp5-finalize` is the PR head, base `master`. |
+| Policy pages | Remain drafts until business approval. |
+| Razorpay live credentials | Reserved for the final production deployment stage; the real test-mode run waits for `rzp_test_` keys in the staging `.env`. |
+| Flag cleanup | No admin "clear flag" action is being built now; plan documented in [SP5-flag-cleanup-plan.md](SP5-flag-cleanup-plan.md). |
+| Dev test data | Cleanup waits for owner approval (backup exists outside the repository). |
+| Homepage | The "32+ Years Experience" claim and the "30 years in universities + 2 years company experience" text were removed. |
 | Hosting | A separate final stage; not decided or started. |
 
 Still open:
@@ -256,6 +264,7 @@ Still open:
 | U7 | Hosting: HTTPS API URL, Poppler install, cron, PHP-FPM workers, supported base image | Not started |
 | - | Review and approval of the four draft policy pages (text in `src/content/policies`) | Draft |
 | - | Approval of book descriptions and categories | Current text on books 1 and 2 |
+| - | Homepage claims awaiting business confirmation: world-class, retired professors, 24x7 availability, free one-to-one counselling, founder titles (Founder Chairman, PhD in Education) | Still on the page. Recommendation: if not verified, remove before production |
 | - | Transactional email (order confirmation, code, shipping) | Not implemented; nothing is emailed about orders; the UI does not promise email |
 | U8 | Guest checkout | Login required |
 | - | Retention of `payment_events.payload` (personal data) and the privacy text (DPDP Act 2023) | Not decided |
@@ -273,7 +282,7 @@ Still open:
 | *Fixed* | No security headers on the API / no CSP | API headers in `backend/nginx/default.conf`; CSP in Report-Only mode via `public/_headers` and `public/.htaccess` |
 | *Fixed* | `Authorization` header stripped on Apache/FastCGI | Accepted from the server variables Apache and FastCGI use; `backend/public/.htaccess` ships |
 | Low | Admin cancel after shipping moves no money; a refund must be issued separately | Document for admins |
-| Low | A deactivated partner still earns on orders created before deactivation | Business rule; no clawback rules by decision |
+| Low | A deactivated partner still earns on orders created before deactivation | Business rule; commissions are never clawed back by decision |
 | Low | `/api/track/:code` returns courier + tracking number to anyone holding the code | By design; random 8-char codes, rate limited |
 | Low | `amount_mismatch` orders stay pending and are re-polled every cron run | Admin resolves manually (README) |
 | Low | Refund list and partner list unpaginated; customer detail shows newest 200 orders | Paginate when volume grows |

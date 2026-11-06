@@ -124,3 +124,5 @@ VITE_API_URL=https://<api-host> npm run build
 1. Staging: test keys, `check_config.php` exits 0, Razorpay checklist run and signed off by the owner.
 2. Production: back up, premigration checks, migrations 001-008, production `.env`, `check_config.php` exits 0, cron installed, admin seeded.
 3. Owner approves; live keys and a new live webhook; one small real payment and exception refund by the owner.
+
+Live Razorpay credentials are reserved for this final production deployment stage; until then only `rzp_test_` keys (to be placed in the staging `.env`) are used. The real test-mode run is still pending. An exception refund does not change the partner commission (audit row `refund.commission_unchanged`).

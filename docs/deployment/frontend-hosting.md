@@ -97,3 +97,7 @@ Rollout: deploy as is, complete a full checkout (test mode), reader session and 
 watch for violations for about a week of real traffic, fix any, then rename the header to
 `Content-Security-Policy` to enforce it. A CSP cannot be set with a `<meta>` tag in Report-Only mode, so it must be an
 HTTP header. Do not enable HSTS before the exact host serves HTTPS correctly; start at `max-age=300` and raise it.
+
+## Verification status of the finished build
+
+Browser E2E ran at 1280, 820 and 390 px on the fake gateway (header Track Order link, mobile menu and admin tables checked at 390 and 820 px). The real Razorpay popup is NOT TESTED. Evidence is kept outside git by the owner and is not linked here. `npm test`: 192 tests in 34 files. The host rules above have not been run on a real host.
