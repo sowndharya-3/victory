@@ -275,16 +275,16 @@ try {
     check('fixture: referral order has a pending commission', val('SELECT status FROM commissions WHERE order_id = ?', [$cp['id']]) === 'pending');
     $svc->approve((int) seedRequest($cp['uid'], $cp['id'], 'x')['refund']['id'], $ADMIN, null);
     $cm = q('SELECT status, reversed_at, clawback_due FROM commissions WHERE order_id = ?', [$cp['id']])->fetch();
-    check('commission pending -> reversed with reversed_at, no clawback', $cm['status'] === 'reversed' && $cm['reversed_at'] !== null && (int) $cm['clawback_due'] === 0);
+    check('commission pending stays pending (no reversal, no clawback) and an audit row records it', $cm['status'] === 'pending' && $cm['reversed_at'] === null && (int) $cm['clawback_due'] === 0 && (int) val("SELECT COUNT(*) FROM audit_logs WHERE action = 'refund.commission_unchanged' AND JSON_UNQUOTE(JSON_EXTRACT(detail, '$.orderId')) = ? AND JSON_UNQUOTE(JSON_EXTRACT(detail, '$.status')) = 'pending' AND JSON_UNQUOTE(JSON_EXTRACT(detail, '$.amount')) = '25.00'", [(string) $cp['id']]) === 1);
     $cy = paidOrder('digital', true);
     q("UPDATE commissions SET status = 'payable' WHERE order_id = ?", [$cy['id']]);
     $svc->approve((int) seedRequest($cy['uid'], $cy['id'], 'x')['refund']['id'], $ADMIN, null);
-    check('commission payable -> reversed', val('SELECT status FROM commissions WHERE order_id = ?', [$cy['id']]) === 'reversed');
+    check('commission payable stays payable', val('SELECT status FROM commissions WHERE order_id = ?', [$cy['id']]) === 'payable');
     $cpd = paidOrder('hardcopy', true);
     q("UPDATE commissions SET status = 'paid', paid_at = NOW(), payout_reference = 'UPI123' WHERE order_id = ?", [$cpd['id']]);
     $svc->approve((int) seedRequest($cpd['uid'], $cpd['id'], 'x')['refund']['id'], $ADMIN, null);
     $cm = q('SELECT status, reversed_at, clawback_due, payout_reference FROM commissions WHERE order_id = ?', [$cpd['id']])->fetch();
-    check('commission already paid -> stays paid, clawback_due=1, not reversed', $cm['status'] === 'paid' && (int) $cm['clawback_due'] === 1 && $cm['reversed_at'] === null && $cm['payout_reference'] === 'UPI123');
+    check('commission already paid -> stays paid, clawback_due stays 0, not reversed', $cm['status'] === 'paid' && (int) $cm['clawback_due'] === 0 && $cm['reversed_at'] === null && $cm['payout_reference'] === 'UPI123');
 
     // --- gateway failure, then retry ---
     $f = paidOrder('digital', true);
@@ -298,7 +298,7 @@ try {
     check('gateway reporting status failed -> refund failed', $svc->approve($fid, $ADMIN, null)['status'] === 'failed' && val('SELECT status FROM orders WHERE id = ?', [$f['id']]) === 'paid');
     $gw->next = 'processed';
     $out = $svc->approve($fid, $ADMIN, null);
-    check('second approve after failure succeeds -> refunded, commission reversed', $out['status'] === 'refunded' && val('SELECT status FROM orders WHERE id = ?', [$f['id']]) === 'refunded' && val('SELECT status FROM commissions WHERE order_id = ?', [$f['id']]) === 'reversed');
+    check('second approve after failure succeeds -> refunded, commission unchanged', $out['status'] === 'refunded' && val('SELECT status FROM orders WHERE id = ?', [$f['id']]) === 'refunded' && val('SELECT status FROM commissions WHERE order_id = ?', [$f['id']]) === 'pending');
     check('audit has a refund.failed row', (int) val("SELECT COUNT(*) FROM audit_logs WHERE action = 'refund.failed' AND entity_id = ?", [$fid]) === 2);
 
     // --- gateway pending -> processing, finalised later (the webhook path) ---
@@ -329,7 +329,7 @@ try {
     $calls = count($gw->calls);
     $ok = $svc->finalise($lwFailed, "rfnd_late_$tag", true);
     check('webhook finalise of the failed one -> true, the open one refunded with the refund id, failed one untouched', $ok === true && refundRow($lwOpen)['status'] === 'refunded' && refundRow($lwOpen)['razorpay_refund_id'] === "rfnd_late_$tag" && refundRow($lwFailed)['status'] === 'failed' && refundRow($lwFailed)['razorpay_refund_id'] === null);
-    check('exactly one refunded refund; order/payment refunded; code revoked; commission reversed; no gateway call', (int) val("SELECT COUNT(*) FROM refunds WHERE order_id = ? AND status = 'refunded'", [$lw['id']]) === 1 && val('SELECT status FROM orders WHERE id = ?', [$lw['id']]) === 'refunded' && val('SELECT status FROM payments WHERE order_id = ?', [$lw['id']]) === 'refunded' && val('SELECT status FROM access_codes WHERE order_id = ?', [$lw['id']]) === 'revoked' && val('SELECT status FROM commissions WHERE order_id = ?', [$lw['id']]) === 'reversed' && count($gw->calls) === $calls);
+    check('exactly one refunded refund; order/payment refunded; code revoked; commission unchanged; no gateway call', (int) val("SELECT COUNT(*) FROM refunds WHERE order_id = ? AND status = 'refunded'", [$lw['id']]) === 1 && val('SELECT status FROM orders WHERE id = ?', [$lw['id']]) === 'refunded' && val('SELECT status FROM payments WHERE order_id = ?', [$lw['id']]) === 'refunded' && val('SELECT status FROM access_codes WHERE order_id = ?', [$lw['id']]) === 'revoked' && val('SELECT status FROM commissions WHERE order_id = ?', [$lw['id']]) === 'pending' && count($gw->calls) === $calls);
     $before = snapshot($lw, $lwOpen);
     check('replayed late webhook (failed one again) -> true, nothing changes', $svc->finalise($lwFailed, "rfnd_late_$tag", true) === true && snapshot($lw, $lwOpen) === $before);
     $lf = paidOrder();
@@ -350,7 +350,7 @@ try {
     $gw->next = 'processed';
     check('markFailed(processing) -> true, failed with note, refund id kept, order paid, code active, commission pending', $svc->markFailed($mfId) === true && refundRow($mfId)['status'] === 'failed' && refundRow($mfId)['admin_note'] !== null && refundRow($mfId)['razorpay_refund_id'] !== null && val('SELECT status FROM orders WHERE id = ?', [$mf['id']]) === 'paid' && val('SELECT status FROM access_codes WHERE order_id = ?', [$mf['id']]) === 'active' && val('SELECT status FROM commissions WHERE order_id = ?', [$mf['id']]) === 'pending');
     check('markFailed again -> false; refund.failed audit row written', $svc->markFailed($mfId) === false && (int) val("SELECT COUNT(*) FROM audit_logs WHERE action = 'refund.failed' AND entity_type = 'refund' AND entity_id = ?", [$mfId]) === 1);
-    check('approve after a gateway-failed refund -> refunded', $svc->approve($mfId, $ADMIN, null)['status'] === 'refunded' && val('SELECT status FROM commissions WHERE order_id = ?', [$mf['id']]) === 'reversed');
+    check('approve after a gateway-failed refund -> refunded', $svc->approve($mfId, $ADMIN, null)['status'] === 'refunded' && val('SELECT status FROM commissions WHERE order_id = ?', [$mf['id']]) === 'pending');
     check('markFailed on a refunded / requested refund -> false, unchanged', $svc->markFailed($mfId) === false && refundRow($mfId)['status'] === 'refunded' && $svc->markFailed($wrId) === false);
 
     // --- two processes approving the same refund: one gateway call ---
@@ -441,14 +441,14 @@ try {
           AND (r.status = 'processing' OR (r.status = 'failed' AND r.razorpay_refund_id IS NULL AND o.status = 'paid' AND r.updated_at >= NOW() - INTERVAL 7 DAY))");
     $res = \App\Orders\OrderReconciler::reconcileRefunds($fg);
     check('reconcile refunds: finalised 2, failed 1, flagged 1, errors 1 (+ foreign rows the fake cannot answer)', $res === ['finalised' => 2, 'failed' => 1, 'flagged' => 1, 'errors' => 1 + $foreign], json_encode($res) . " foreign=$foreign");
-    check('lost refund.processed healed: refunded, order refunded, access revoked, commission reversed',
-        refundRow($lostId)['status'] === 'refunded' && $orderStatus($lost) === 'refunded' && access($lost['uid'])['revoked_at'] !== null && $commission($lost) === 'reversed');
+    check('lost refund.processed healed: refunded, order refunded, access revoked, commission unchanged',
+        refundRow($lostId)['status'] === 'refunded' && $orderStatus($lost) === 'refunded' && access($lost['uid'])['revoked_at'] !== null && $commission($lost) === 'pending');
     check('processing -> gateway failed: refund failed, order still paid', refundRow($goneId)['status'] === 'failed' && $orderStatus($gone) === 'paid');
     check('processing -> gateway pending: unchanged', refundRow($slowId)['status'] === 'processing' && $orderStatus($slow) === 'paid');
     check('processing younger than 10 min: not touched', refundRow($youngId)['status'] === 'processing' && $orderStatus($young) === 'paid');
     $t = refundRow($toutId);
-    check('timed-out (failed, no id) but processed at Razorpay: finalised with that id, access revoked, commission reversed',
-        $t['status'] === 'refunded' && $t['razorpay_refund_id'] === "rfnd_{$tag}_tout" && $orderStatus($tout) === 'refunded' && access($tout['uid'])['revoked_at'] !== null && $commission($tout) === 'reversed');
+    check('timed-out (failed, no id) but processed at Razorpay: finalised with that id, access revoked, commission unchanged',
+        $t['status'] === 'refunded' && $t['razorpay_refund_id'] === "rfnd_{$tag}_tout" && $orderStatus($tout) === 'refunded' && access($tout['uid'])['revoked_at'] !== null && $commission($tout) === 'pending');
     $p = refundRow($partId);
     check('partial amount at Razorpay: never finalised; order paid, access live, commission untouched, flagged + audit',
         $p['status'] === 'failed' && $p['razorpay_refund_id'] === null && $orderStatus($part) === 'paid' && access($part['uid'])['revoked_at'] === null && $commission($part) === 'pending'

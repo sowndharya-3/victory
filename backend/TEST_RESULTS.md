@@ -348,3 +348,8 @@ received with From `noreply@vtee.test`, To `admin@vtee.test`, Reply-To `Asha K <
 SMTP port gave 502 `email_failed`. Authorization header: `curl /api/me -H "Authorization: Bearer x"` through nginx/FPM
 answers `invalid_token` (not `unauthorized`); `public/.htaccess` and the REDIRECT_HTTP_AUTHORIZATION path are covered by middleware_test.
 
+### Decision B1: no automatic commission reversal
+RefundService::finaliseLocked no longer reverses or flags commissions; it writes `refund.commission_unchanged`
+(orderId, commissionId, status, amount). refund_test, order_test.sh (and the unchanged commission/reconciler/admin_authz
+suites) now expect pending/payable/paid commissions to stay as they are. Full-suite counts are in the section below.
+

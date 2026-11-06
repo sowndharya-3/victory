@@ -9,8 +9,7 @@ use App\Support\Settings;
 
 /**
  * Flat-rupee commission rates and the admin payout lifecycle pending -> payable -> paid.
- * Rows are created only by OrderFulfillment::markPaid (amount snapshotted there) and reversed only by
- * RefundService; nothing here recomputes an amount. Locks a single commissions row, so it cannot
+ * Rows are created only by OrderFulfillment::markPaid (amount snapshotted there) and never changed by refunds (RefundService only writes an audit row); nothing here recomputes an amount. Locks a single commissions row, so it cannot
  * deadlock with RefundService (which takes the commission lock last).
  */
 class CommissionService

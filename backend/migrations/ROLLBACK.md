@@ -52,7 +52,7 @@ ALTER TABLE books DROP COLUMN page_count;
 
 ## 004_refunds
 
-Loses every refund row and the payout/reversal columns. `reversed` commissions have no place in the old enum, so
+Loses every refund row and the payout/reversal columns. The app no longer sets `reversed`/`clawback_due` (only legacy rows can hold them). `reversed` commissions have no place in the old enum, so
 they are turned into `pending` first (decide with the business; this only exists to keep the ALTER from failing).
 
 ```sql

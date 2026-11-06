@@ -13,7 +13,7 @@ use PDOException;
  * Full refunds only (spec §4.5). States: requested -> approved -> processing -> refunded, or rejected / failed
  * (failed retries via approve). The amount is always the captured payments.amount.
  * Lock order: refunds row, then payments+orders, then access_codes / book_access (AccessCodeService), then commissions.
- * Only finalise() moves money-side state (order/payment refunded, access revoked, commission reversed).
+ * Only finalise() moves money-side state (order/payment refunded, access revoked; commissions are never touched).
  */
 class RefundService
 {
@@ -271,16 +271,13 @@ class RefundService
             $detail['fulfilment'] = 'cancelled';
         }
 
-        $stmt = $db->prepare('SELECT id, status FROM commissions WHERE order_id = ? FOR UPDATE');
+        // Owner decision: a refund never changes a commission (no reversal, no clawback). Leave a trail so admins can see
+        // which commissions belong to refunded orders.
+        $stmt = $db->prepare('SELECT id, status, amount FROM commissions WHERE order_id = ?');
         $stmt->execute([$orderId]);
         if ($c = $stmt->fetch()) {
-            if ($c['status'] === 'paid') {
-                $db->prepare('UPDATE commissions SET clawback_due = 1 WHERE id = ?')->execute([$c['id']]);
-                $detail['commission'] = 'clawback_due';
-            } elseif (in_array($c['status'], ['pending', 'payable'], true)) {
-                $db->prepare("UPDATE commissions SET status = 'reversed', reversed_at = NOW() WHERE id = ?")->execute([$c['id']]);
-                $detail['commission'] = 'reversed';
-            }
+            self::audit($adminId, 'refund.commission_unchanged', (int) $r['id'], ['orderId' => $orderId, 'commissionId' => (int) $c['id'], 'status' => $c['status'], 'amount' => $c['amount']]);
+            $detail['commission'] = 'unchanged';
         }
         self::audit($adminId, 'refund.refunded', (int) $r['id'], $detail);
         return true;

@@ -577,7 +577,7 @@ get_json "$TOKEN_J" "/api/me/orders/$JD"
 check "customer sees order refunded" "$([ "$GCODE" = "200" ] && jh "$G" '"status":"refunded"' && echo true || echo false)"
 check "payment refunded; code revoked (refund), code_enc NULL" "$([ "$(sql "SELECT status FROM payments WHERE order_id=$JD")" = "refunded" ] && [ "$(sql "SELECT CONCAT(status,'|',revoked_reason,'|',code_enc IS NULL) FROM access_codes WHERE order_id=$JD ORDER BY id DESC LIMIT 1")" = "revoked|refund|1" ] && echo true || echo false)"
 check "customer's book_access.revoked_at set" "$([ "$(sql "SELECT revoked_at IS NOT NULL FROM book_access WHERE user_id=$UID_J AND book_id=$BOOK_ID")" = "1" ] && echo true || echo false)"
-check "commission reversed with reversed_at" "$([ "$(sql "SELECT CONCAT(status,'|',reversed_at IS NOT NULL) FROM commissions WHERE order_id=$JD")" = "reversed|1" ] && echo true || echo false)"
+check "commission unchanged by the refund (pending, not reversed)" "$([ "$(sql "SELECT CONCAT(status,'|',reversed_at IS NOT NULL,'|',clawback_due) FROM commissions WHERE order_id=$JD")" = "pending|0|0" ] && echo true || echo false)"
 check "audit rows refund.approve + refund.refunded carry admin_id" "$([ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE entity_type='refund' AND entity_id=$RF1 AND admin_id IS NOT NULL AND action IN ('refund.approve','refund.refunded')")" = "2" ] && echo true || echo false)"
 get_json "$TOKEN_J" "/api/me/library"
 check "library: book revoked, refunded order not pending redemption" "$([ "$GCODE" = "200" ] && jh "$G" "\"orderId\":$JD,[^}]*\"accessStatus\":\"revoked\"" && jh "$G" '"pendingRedemptions":\[\]' && echo true || echo false)"
@@ -1099,11 +1099,10 @@ post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":"
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C1/paid" '{"payoutReference":" UPI-77881 "}'
 check "markPaid: no/bad reference 400; then paid with trimmed reference + paid_at" "$([ "$S1" = "400 y" ] && [ "$S2" = "400" ] && [ "$PCODE" = "200" ] && jh "$P" '"status":"paid"' && jh "$P" '"payoutReference":"UPI-77881"' && [ "$(sql "SELECT CONCAT_WS('|',status,payout_reference,paid_at IS NOT NULL) FROM commissions WHERE id=$C1")" = "paid|UPI-77881|1" ] && echo true || echo false)"
 post_json "$ADMIN_TOKEN" "/api/admin/orders/$QO/refund" '{"reason":"Commission reversal test"}'; S1=$PCODE
-post_json "$ADMIN_TOKEN" "/api/admin/commissions/$C2/payable" ''
-check "refunded order: commission reversed; reversed -> payable 400 invalid_transition" "$([ "$S1" = "201" ] && [ "$(sql "SELECT status FROM commissions WHERE id=$C2")" = "reversed" ] && [ "$PCODE" = "400" ] && jh "$P" '"code":"invalid_transition"' && echo true || echo false)"
+check "refunded order: commission unchanged (pending, not reversed, no clawback) + refund.commission_unchanged audit row" "$([ "$S1" = "201" ] && [ "$(sql "SELECT CONCAT(status,'|',clawback_due) FROM commissions WHERE id=$C2")" = "pending|0" ] && [ "$(sql "SELECT COUNT(*) FROM audit_logs WHERE action='refund.commission_unchanged' AND JSON_UNQUOTE(JSON_EXTRACT(detail,'$.commissionId'))='$C2'")" = "1" ] && echo true || echo false)"
 post_json "$ADMIN_TOKEN" "/api/admin/commissions/999999999/payable" ''
 get_json "$ADMIN_TOKEN" "/api/admin/commissions?partnerId=$PID1"
-check "unknown commission 404; totals paid 25.00 / reversed 30.00" "$([ "$PCODE" = "404" ] && jh "$G" '"paid":\{"count":1,"amount":"25\.00"\}' && jh "$G" '"reversed":\{"count":1,"amount":"30\.00"\}' && echo true || echo false)"
+check "unknown commission 404; totals paid 25.00 / pending 30.00 / reversed 0" "$([ "$PCODE" = "404" ] && jh "$G" '"paid":\{"count":1,"amount":"25\.00"\}' && jh "$G" '"pending":\{"count":1,"amount":"30\.00"\}' && jh "$G" '"reversed":\{"count":0,"amount":"0\.00"\}' && echo true || echo false)"
 
 # Pricing settings (U1/U2 configurable, validated)
 get_json "$ADMIN_TOKEN" "/api/admin/settings/pricing"
