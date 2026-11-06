@@ -1,8 +1,8 @@
 const reasons = [
   {
     icon: 'fas fa-award',
-    title: '32+ Years Experience',
-    text: 'The Founder has a 30 years experience in universities and 2 years of company experience',
+    title: 'Experienced Guidance',
+    text: 'Personal guidance from our founder and team for your educational needs',
   },
   {
     icon: 'fas fa-users',

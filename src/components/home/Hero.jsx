@@ -9,7 +9,7 @@ function Hero() {
           <br />
           <strong>அனைவருக்கும் அரசு வேலை / அனைவருக்கும் பட்டம் / அனைவரும் தொழில்முனைவோர்</strong>
         </div>
-        <p className="fade-in">Providing world-class educational services with 32+ years of experience. Personalized approach with professional ethics for all your educational needs.</p>
+        <p className="fade-in">Providing world-class educational services. Personalized approach with professional ethics for all your educational needs.</p>
         <div className="hero-buttons">
           <a href="#services" className="btn btn-primary fade-in">Our Services</a>
           <a href="#contact" className="btn btn-outline fade-in">Contact Us</a>
