@@ -80,7 +80,7 @@ function AdminRefundsPage() {
           {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
       </div>
-      <p><small>Approving refunds the full amount through Razorpay, revokes digital access and reverses commission.</small></p>
+      <p><small>Approving refunds the full amount through Razorpay, revokes digital access.</small></p>
       <LoadState loading={loading} error={error} empty={!items.length} emptyText="No refunds in this queue." />
       {items.length > 0 && (
         <Table head={['Order', 'Type', 'Status', 'Amount', 'Reason', 'Admin note', 'Requested', 'Action']}>

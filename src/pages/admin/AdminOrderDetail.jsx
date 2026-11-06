@@ -104,7 +104,7 @@ function RefundForm({ order, onDone }) {
       <input id="refund-reason" className="form-control" maxLength={500} value={reason} onChange={e => setReason(e.target.value)} />
       {error && <p role="alert" className="form-error">{error}</p>}
       <button type="submit" className="btn btn-outline" disabled={busy}>Refund this order</button>
-      <small> Refunds the full amount through Razorpay, revokes digital access and reverses commission.</small>
+      <small> Refunds the full amount through Razorpay, revokes digital access.</small>
     </form>
   )
 }
