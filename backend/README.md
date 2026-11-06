@@ -103,6 +103,15 @@ emails that 008 would reject, orphan rows); fix the data before applying.
 per email and one open application per email, enforced by the database. Rejected emails may apply again.
 Phone, WhatsApp and UPI are deliberately not unique (families/institutions share them).
 
+## Contact form mail
+
+`POST /api/contact` sends through a small built-in SMTP client (`src/Mail/SmtpMailer.php`, no composer): set
+`CONTACT_TO_EMAIL`, `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_USER`, `SMTP_PASS`, `SMTP_SECURE`
+(`tls` = STARTTLS, `ssl` = implicit TLS, `none` = dev mail catcher only). `check_config.php` WARNs in dev and FAILs
+elsewhere when they are missing. Failures are logged as `contact: email delivery failed (<class>: <reply line>)`,
+never the credentials, addresses or message. Local check: run a mail catcher (e.g. mailpit) on the compose network and
+point `SMTP_HOST` at it with `SMTP_SECURE=none`.
+
 ## API endpoints
 
 | Method | Path | Auth | Notes |
@@ -159,6 +168,7 @@ Phone, WhatsApp and UPI are deliberately not unique (families/institutions share
 | POST | /api/admin/orders/:id/code/revoke | admin | `{reason}` (1–255, not `customer_request`) revokes the order's current code (decided under the order lock) and any access it granted; returns the detail. 404 no code |
 | POST | /api/admin/orders/:id/code/reissue | admin | `{reason}` (1–255, not `customer_request`) revokes the current code and returns `{code}` (`Cache-Control: no-store`): the only admin response that ever contains a plaintext code; give it to the customer, it is not shown again. 404 (not a paid digital order). 30 per 10 min per admin (429) |
 | GET | /api/admin/audit-logs?entityType=&entityId=&page=&perPage= | admin | `{items:[{id,adminId,userId,action,entityType,entityId,detail,createdAt}], page, perPage, total}`, newest first |
+| POST | /api/contact | none | `{name (2-100), email (valid, <=254), phone? (digits, +, spaces; 7-20), subject? (<=150), message (10-5000), website}` -> 200 `{ok:true}` after the message was emailed to `CONTACT_TO_EMAIL` (Reply-To = visitor, From = `MAIL_FROM`; nothing is stored). `website` is a honeypot: non-empty -> 200 `{ok:true}` silently, nothing sent. 400 `validation_error` with `error.fields`; 429 `rate_limited` + `Retry-After: 3600` (5 well-formed submissions/hour per client IP); 413 body over 64 KB; 502 `email_failed` ("Could not send your message. Please try again later or email us directly.") whenever SMTP is unconfigured or delivery fails - never a success. CR/LF and other control characters are stripped from header fields (an email containing them is rejected) |
 | POST | /api/referral/applications | none | Partner sign-up `{name, qualification?, place?, district?, status (Student/Scholarship/Faculty/Institution), phone, whatsapp (10-digit Indian mobile, `+91`/spaces/dashes normalised), upiId? (name@bank or a 10-digit mobile), gmail}` (lengths per `referral_applications`; gmail lowercased) → 201 `{id, applicationStatus:"pending"}`. 400 `validation_error` with `fields`; 409 `duplicate_application` if that gmail has a pending/approved application (enforced by `uq_open_application`, so simultaneous submissions yield one 201 and 409s; a rejected gmail may apply again). Free text is Unicode-trimmed (NBSP counts as space) and control characters (NUL, CR/LF, ANSI escapes) or invalid UTF-8 are rejected. Body over 16 KB → 413 `payload_too_large`. 5 valid submissions per hour per IP (`ClientIp`, see Environment variables) → 429; the counter runs before the duplicate check, so a 409 duplicate uses budget, and the 409 does reveal that an email has applied (accepted: rate-limited, applicant-friendly) |
 | GET | /api/admin/referrals?status=&page=&perPage= | admin | `{applications:{items:[{id,name,qualification,place,district,status,phone,whatsapp,upiId,gmail,applicationStatus,reviewedAt,createdAt,partnerId}],page,perPage,total}, partners:[{id,applicationId,name,phone,whatsapp,upiId,gmail,referralCode,active,createdAt,updatedAt}]}`; `status` filters applications (pending/approved/rejected); partners unpaginated |
 | POST | /api/admin/referrals/:id/approve | admin | Only from `pending` (row-locked): creates the partner with `referral_code` `VTP-` + 6 random Crockford base32 chars (unique, retried on collision) → `{application, partner}`. 409 `duplicate_partner` if a partner already has that gmail (case/outer-space-insensitive; also when a concurrent approve/edit wins the race, via `uq_partner_gmail`); 400 `invalid_transition` otherwise, 404 |

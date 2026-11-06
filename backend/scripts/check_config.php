@@ -58,6 +58,20 @@ foreach (['JWT_SECRET', 'CODE_SECRET'] as $k) {
 }
 ok(!Env::weakSecret((string) getenv('DB_PASS'), $dev ? 1 : 12), 'DB_PASS set' . ($dev ? '' : ', >= 12 chars, not a placeholder'), $dev ? 'WARN' : 'FAIL');
 
+// Contact form mail (POST /api/contact): the API answers 502 email_failed until all of these are set.
+$mailSet = fn (string $k) => trim((string) getenv($k)) !== '';
+foreach (['CONTACT_TO_EMAIL', 'MAIL_FROM'] as $k) {
+    ok($mailSet($k) && filter_var(getenv($k), FILTER_VALIDATE_EMAIL) !== false, "$k is a valid email address", $dev ? 'WARN' : 'FAIL');
+}
+ok($mailSet('SMTP_HOST'), 'SMTP_HOST set', $dev ? 'WARN' : 'FAIL');
+$secure = strtolower((string) (getenv('SMTP_SECURE') ?: 'tls'));
+ok(in_array($secure, ['tls', 'ssl', 'none'], true), 'SMTP_SECURE is tls, ssl or none (default tls)', $dev ? 'WARN' : 'FAIL');
+if ($secure === 'none') {
+    item($dev ? 'WARN' : 'FAIL', 'SMTP_SECURE=none sends mail (and the SMTP login) unencrypted: dev/mailpit only');
+}
+ok($mailSet('SMTP_USER') && $mailSet('SMTP_PASS'), 'SMTP_USER / SMTP_PASS set (AUTH LOGIN)', $dev ? 'WARN' : 'FAIL');
+ok((int) (getenv('SMTP_PORT') ?: 587) > 0, 'SMTP_PORT is a number (default 587)', $dev ? 'WARN' : 'FAIL');
+
 $origin = (string) getenv('FRONTEND_ORIGIN');
 $parts = parse_url($origin);
 $isOrigin = is_array($parts) && isset($parts['scheme'], $parts['host']) && !isset($parts['path']) && !isset($parts['query']) && !isset($parts['user']) && !str_ends_with($origin, '/');

@@ -22,6 +22,7 @@ use App\Controllers\AdminCodeController;
 use App\Controllers\ReferralApplicationController;
 use App\Controllers\AdminReferralController;
 use App\Controllers\AdminCommissionController;
+use App\Controllers\ContactController;
 
 $router->get('/api/health', [new HealthController(), 'check']);
 $router->post('/api/auth/register', [new AuthController(), 'register']);
@@ -85,6 +86,7 @@ $router->post('/api/admin/orders/{id}/code/revoke', [$adminCodes, 'revoke']);
 $router->post('/api/admin/orders/{id}/code/reissue', [$adminCodes, 'reissue']);
 $router->get('/api/admin/audit-logs', [$adminOrders, 'auditLogs']);
 
+$router->post('/api/contact', [new ContactController(), 'submit']);
 $router->post('/api/referral/applications', [new ReferralApplicationController(), 'create']);
 $adminReferrals = new AdminReferralController();
 $router->get('/api/admin/referrals', [$adminReferrals, 'list']);
