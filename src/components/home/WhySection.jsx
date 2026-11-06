@@ -5,29 +5,14 @@ const reasons = [
     text: 'Personal guidance from our founder and team for your educational needs',
   },
   {
-    icon: 'fas fa-users',
-    title: 'Expert Team',
-    text: 'All services are by team of various subject retired professors',
-  },
-  {
     icon: 'fas fa-handshake',
     title: 'Professional Ethics',
-    text: 'One to one and End to end solution with professional ethics',
-  },
-  {
-    icon: 'fas fa-clock',
-    title: '24x7 Support',
-    text: '24x7 easily approachable by Social media - Gmail. Phone from 10 am- 5 pm',
+    text: 'End to end solution with professional ethics',
   },
   {
     icon: 'fas fa-rupee-sign',
     title: 'Genuine Fee',
-    text: 'World class expertise services offered at right time with genuine fee',
-  },
-  {
-    icon: 'fas fa-user-graduate',
-    title: 'Free Counseling',
-    text: 'All services before free One to One counselling',
+    text: 'Services offered at the right time with genuine fee',
   },
 ]
 

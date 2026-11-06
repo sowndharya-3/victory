@@ -14,15 +14,13 @@ function Founder() {
         <div className="founder-container">
           <div className="founder-header fade-in">
             <h3 className="founder-name">Dr. T. Sampath Kumar</h3>
-            <h4 className="founder-qualification">PhD in Education</h4>
-            <p className="founder-title">Founder Chairman, Victory Today Educational Enterprises</p>
           </div>
 
           <div className="founder-content">
             <div className="founder-image-container slide-in-left">
               {imageFailed ? (
                 <div className="founder-img-placeholder">
-                  Dr. T. Sampath Kumar<br />PhD in Education<br />Founder Chairman
+                  Dr. T. Sampath Kumar
                 </div>
               ) : (
                 <img

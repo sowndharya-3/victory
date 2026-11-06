@@ -32,7 +32,7 @@ function Footer() {
             <div className="footer-col fade-in">
               <h3>Victory Today</h3>
               <p className="tamil">விடாமுயற்சி - தொடர் பயிற்சி - வெற்றி நிச்சயம்</p>
-              <p>Providing world-class educational services with personalized approach and professional ethics.</p>
+              <p>Providing educational services with personalized approach and professional ethics.</p>
             </div>
 
             <div className="footer-col fade-in" style={{ transitionDelay: '0.1s' }}>

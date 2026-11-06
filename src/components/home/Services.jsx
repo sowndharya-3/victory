@@ -119,7 +119,6 @@ const services = [
   {
     title: '10. SC/ST or MBC or BC Scholarship or Stipend',
     tamil: 'SC/ST அல்லது MBC அல்லது BC உதவித்தொகை / பயிற்சி',
-    price: 'Fee Free Counselling',
     description: 'Assistance with scholarship and stipend applications for SC/ST, MBC, and BC communities.',
     items: [
       'Central/State Government Schemes - Awareness Information',

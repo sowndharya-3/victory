@@ -106,7 +106,7 @@ function Contact() {
       <div className="container">
         <div className="section-title">
           <h2 className="fade-in">Contact Us</h2>
-          <p className="fade-in">Get in touch with us for free counselling and services</p>
+          <p className="fade-in">Get in touch with us for our services</p>
         </div>
 
         <div className="contact-container">
@@ -173,7 +173,7 @@ function Contact() {
               </div>
 
               <div className="form-group">
-                <label htmlFor="counseling-time">Fix free counselling time:</label>
+                <label htmlFor="counseling-time">Preferred counselling time:</label>
                 <input type="datetime-local" id="counseling-time" className="form-control" value={form.counselingTime} onChange={update('counselingTime')} />
               </div>
 
