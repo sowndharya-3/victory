@@ -2,7 +2,7 @@
 
 Companion to [SP5-handover.md](SP5-handover.md). The handover describes what was built and how to deploy it. This file lists what is still open before production, what the owner must decide, and what can only be verified with real Razorpay test credentials.
 
-**Status of the branch:** `sp5-orders-codes`, ready for review into `master` (the repository default branch; there is no `main`). Not merged, not deployed. **Live payments must stay disabled** until section 4 has been completed with Razorpay test credentials.
+**Status:** this review was written on `sp5-orders-codes` and has been updated for the finalization work on `sp5-finalize` (see [SP5-PR-description.md](SP5-PR-description.md); the PR source branch is still to be chosen by the owner). Base branch is `master` (there is no `main`). Not merged, not deployed. **Live payments must stay disabled** until section 4 has been completed with Razorpay test credentials; that run has **not** happened (no test keys exist in the project).
 
 Meaning of the columns: *Owner* = a business decision or an account/hosting action. *Eng* = a code or configuration change. *Deploy* = blocks a production deploy. *Follow* = can ship after go-live.
 
@@ -15,12 +15,16 @@ Meaning of the columns: *Owner* = a business decision or an account/hosting acti
 | Weak or missing secrets were only noticed at the first payment | `backend/scripts/check_config.php`: a deploy-time check that prints PASS/FAIL per item and never prints secret values. |
 | Migration 003 can half-apply on a live database with duplicate rows | `backend/scripts/premigration_checks.sql`: read-only checks that must return zero rows. Run it, and take a backup, before applying migrations. |
 | PDF page renderer could stall the API (blocking lock, no size cap, weak page-count parsing, non-atomic re-upload) | Lock with a deadline, page-size and resource limits, tested timeout, safe generic errors, anchored page-count parsing, atomic re-upload and guarded `page_count` write. |
-| Docker base image was end-of-life Debian bullseye | Moved to `php:8.2-fpm-trixie` (Debian 13). The full backend suite was run on the new image (results in `backend/TEST_RESULTS.md`). |
+| Docker base image was end-of-life Debian bullseye | Moved to Debian 13 trixie, then to `php:8.4-fpm-trixie` in the finalization pass. The full backend suite was run on the new image (results in `backend/TEST_RESULTS.md`). |
 | Two partners could share one email; duplicate applications could race | Database-enforced unique partner email and one pending-or-approved application per email (migration 008), with 409 responses instead of 500. |
 | Deep links such as `/admin` returned 404 on a static host | `.htaccess` (Apache), `_redirects` (Netlify/Cloudflare) and an nginx snippet; unknown paths show a "Page not found" page. See [frontend-hosting.md](frontend-hosting.md). |
 | Stray `run` npm dependency in `package.json` | Reverted. It was never imported and looks like an accidental `npm i run`. |
 | Three screenshots showed development access codes | Redacted. The codes no longer exist in the database. |
 | `.gitignore` gaps (`.env*`, `*.zip`, `.playwright-mcp/`, private screenshots) | Added. |
+
+### Fixed in the finalization pass (`sp5-finalize`)
+
+Refund reconciliation for lost webhooks and dashboard refunds (F-1); API security headers and a Report-Only CSP (F-3); proxy-aware client IP with `TRUSTED_PROXIES` and /64 grouping for IPv6 (F-4); `Authorization` header accepted on Apache/FastCGI and a front-controller `.htaccess` for the API (part of D-3); book title/price validation, admin category and price editing, payment currency check (F-9); production build fails without `VITE_API_URL` (F-9); PHP 8.4 (F-11); contact form API; draft policy pages; no-refund notice at checkout; customer refund-request route removed; commission payout hold removed. The full commit list is in the PR description.
 
 ## 2. Still open
 
@@ -28,9 +32,9 @@ Meaning of the columns: *Owner* = a business decision or an account/hosting acti
 
 | # | Item | Who |
 |---|---|---|
-| D-1 | **Policy pages** are missing: Refund/Cancellation, Terms, Privacy, Shipping, Contact. Razorpay live activation checks the website for them. The refund-policy text depends on the decisions in section 3. | Owner (text) + Eng (pages) |
+| D-1 | **Policy pages**: four draft pages exist (`/terms`, `/privacy`, `/refund-policy`, `/digital-access`, text in `src/content/policies`) and are linked from the footer. The owner must review and approve the text before go-live; a separate shipping policy page does not exist (shipping is covered only if the owner adds it to the drafts). The contact form is implemented. Razorpay live activation checks the website for these pages. | Owner (review) |
 | D-2 | **Razorpay account and test-mode run** (U6): KYC, test and live keys, webhook secret, auto-capture on, and the checklist in section 4 passing. | Owner |
-| D-3 | **Hosting** (U7): HTTPS API host, Poppler installed, cron for `reconcile_orders.php` with `flock` and alerting on failure, `pm.max_children >= 10`, real client IP behind any proxy/CDN, `storage/` outside the web root. If the API runs on Apache or shared hosting, `backend/public` has no front-controller `.htaccess` and the nginx rules (404 for `book.pdf`/`pages/`, dot-file deny) have no Apache equivalent; the `Authorization` header may also be stripped. Decide the API host before go-live. | Owner + Eng |
+| D-3 | **Hosting** (U7, a separate final stage, not started): HTTPS API host, Poppler installed, cron for `reconcile_orders.php` with `flock` and alerting on failure, `pm.max_children >= 10`, real client IP behind any proxy/CDN (`set_real_ip_from` or `TRUSTED_PROXIES`), `storage/` outside the web root. Code side done: `backend/public/.htaccess` (front controller, 404 for `book.pdf`/`pages/`, dot-files and stray PHP) and the `Authorization` header fix exist, checked only on a throwaway Apache container. Still to do on the real host: HTTPS, HSTS, cron, workers, backups. See [SP5-environments.md](SP5-environments.md). | Owner + Eng |
 | D-4 | **Shipping and GST** (U1/U2) must be confirmed by the accountant and set in Admin, Settings. Defaults are shipping 0 and GST 0% inclusive, so no GST is collected or shown. | Owner |
 | D-5 | Run `check_config.php` and `premigration_checks.sql` on the production server, back up the database, then apply migrations in order. | Eng |
 | D-6 | Seed exactly one admin with a strong password and confirm the development admin is not copied to production. | Eng |
@@ -41,62 +45,56 @@ Meaning of the columns: *Owner* = a business decision or an account/hosting acti
 
 | # | Item | Who | Notes |
 |---|---|---|---|
-| F-1 | **Lost refund webhook.** Nothing re-checks refunds if `refund.processed` is lost, a refund stays `processing`, or a refund is made in the Razorpay dashboard (logged and ignored). The order stays `paid`, access stays live, the commission stays payable. | Eng | Do this before volume. Add a refund reconciler to the cron. |
+| F-1 | **Lost refund webhook.** *Fixed.* The cron reconciler now re-checks open refunds and finalises them; a full refund made in the Razorpay dashboard is recorded; a partial or unmatched external refund is flagged for an admin (`admin_flag`). Still verify against real Razorpay test mode. | Eng | Done; verification pending. |
 | F-2 | **Watermark limits.** The watermark is a browser overlay. Page images are served clean and are the same for every user, so a buyer can script-download a whole book (rate limit 240 pages per 5 minutes) with no traceable mark. It deters casual sharing only. | Owner (accept, or pay for per-user burned-in marks) + Eng | The design accepted this risk. |
-| F-3 | **Security headers.** The API sends no HSTS, CSP or `frame-ancestors`. The frontend rules add nosniff, Referrer-Policy and X-Frame-Options only. Tokens live in `localStorage`, so any XSS would expose the admin token. | Eng | Add a CSP (start in report-only mode) before go-live if possible. |
-| F-4 | Rate limits key on `REMOTE_ADDR`. Behind a proxy/CDN all visitors share one bucket; IPv6 /64 rotation is possible. | Eng + Owner (hosting) | Becomes a deploy blocker if the API sits behind a CDN. |
-| F-5 | Commission on a hard copy cancelled after shipping stays payable. `clawback_due` has no settle action. A deactivated partner still earns on orders created before deactivation. Residual payout race if a refund opens after the hold check. | Owner (U4) + Eng | See decision D8 below. |
-| F-6 | Duplicate payment on an already-paid order is flagged (`admin_flag`) but has no admin refund UI; it can only be refunded from the Razorpay dashboard. | Eng | |
-| F-7 | Email (U5) is deferred: refunds, revocations and shipments are silent to the customer. The policy text must say status is shown in Account and My Books. | Owner | |
-| F-8 | No customer refund-request screen (the API exists). Build it only after decisions D1-D4. | Owner then Eng | |
-| F-9 | Smaller items: admin lists unpaginated, partner edit UI, category not editable, reader index iframe has no sandbox, JWT has no `nbf`/`iss`/`aud` and no server-side revocation, `currency` not checked in `markPaid`, `AdminBookController::update` does not validate prices, test CLI helpers lack a `PHP_SAPI` guard, `API_BASE_URL` silently falls back to localhost if `VITE_API_URL` is missing at build time. | Eng | |
-| F-11 | **Runtime versions.** The local stack still uses `mysql:8.0`, which reached end of life in April 2026, and PHP 8.2, whose security support ends in December 2026 (verify both dates against the vendors). The major versions were deliberately not changed in this pass. Plan an upgrade to MySQL 8.4 LTS and PHP 8.3/8.4 with the full test suite, and choose supported versions on the production host. | Eng | Plan before go-live; the production host decides. |
-| F-10 | Self-referral check compares only the partner gmail with the buyer's login email, so a second account bypasses it (worth the flat commission per order). "First purchase only" (U4) would bound it. | Owner (U4) | |
+| F-3 | **Security headers.** *Fixed (Report-Only).* The API sends `Content-Security-Policy: default-src 'none'`, nosniff, `Referrer-Policy: no-referrer` and `Cache-Control: no-store` (nginx config). The static host sends a CSP in **Report-Only** mode, Permissions-Policy, nosniff, Referrer-Policy and X-Frame-Options (`public/_headers`, `public/.htaccess`). Remaining: HSTS only once HTTPS works on the real host; switch the CSP to enforcing after a clean week of reports. Tokens still live in `localStorage`, so an XSS would expose the admin token; the CSP is the main defence. | Eng | HSTS and CSP enforcement at hosting time. |
+| F-4 | Rate limits and proxies. *Fixed in code.* `TRUSTED_PROXIES` (or nginx `set_real_ip_from`) gives the real visitor IP; IPv6 is bucketed per /64. The deployer must still configure one of them if a proxy/CDN sits in front. | Eng + Owner (hosting) | At hosting time. |
+| F-5 | Commission. Decided: Rs 25 online and Rs 25 hard copy, no hold period, no clawback or settlement rules. The `clawback_due` flag from migration 004 is kept as a flag only. Remaining by design: a hard copy cancelled after shipping keeps its commission; a deactivated partner still earns on orders created before deactivation. | Owner decided | None. |
+| F-6 | Duplicate payment on an already-paid order is flagged (`admin_flag`). Per the owner's decision it is a genuine exception: an admin refunds it with "Refund this order" (or from the Razorpay dashboard, which the reconciler then records). | Admin runbook | |
+| F-7 | Transactional email is not implemented: refunds, revocations and shipments are silent to the customer, and the policy text must say status is shown in Account and My Books. The contact form does send mail to the admin (SMTP). | Owner | Follow |
+| F-8 | Customer refund-request screen. *Closed by decision:* there is no customer refund-request workflow; the route was removed. | Owner decided | None. |
+| F-9 | Smaller items. *Fixed:* category and price editing in Admin, price/title validation on update, payment currency check, `VITE_API_URL` missing at build time (the production build now fails). *Still open:* admin lists unpaginated, partner edit UI, reader index iframe has no sandbox, JWT has no `nbf`/`iss`/`aud` and no server-side revocation, test CLI helpers lack a `PHP_SAPI` guard. | Eng | Follow |
+| F-11 | **Runtime versions.** PHP is now 8.4 (security support to 2028-12-31; verify the date); the image used before is kept as `vtee-php:8.2-trixie-rollback`. `mysql:8.0` in the dev compose file reached end of life in April 2026 (verify): the production host should use a supported MySQL (8.4 LTS) or MariaDB, tested with migrations 001-008 and the suites. | Eng | Production host decides. |
+| F-10 | Self-referral check compares only the partner gmail with the buyer's login email, so a second account bypasses it (worth the flat Rs 25 per order). No first-purchase-only rule has been decided. | Owner | |
 
 ## 3. Business decisions required from the owner
 
-### Open decisions from the design (U1-U8)
+### Decisions confirmed by the owner
+
+| Topic | Decision |
+|---|---|
+| Refunds | No general refunds for purchased books. No customer refund-request workflow (route removed, no screen). Genuine exceptions (duplicate payment, debited-but-failed, legal cases) are handled manually by an admin with an admin refund. This answers the former questions D1-D10 (windows, redeemed codes, returns, partial refunds, reason list, self-service button, gift recipients): none of those policies is built. |
+| Commission | Rs 25 online + Rs 25 hard copy. No hold period. No clawback or settlement rules. |
+| Notifications | Order status is shown in Account and My Books; transactional email is not built. The contact form emails the admin. |
+| Hosting | A separate final stage. |
+
+The checkout and book page show a no-refund notice, and checkout requires an acknowledgement. The text of the four policy pages is a draft awaiting owner review.
+
+### Still open (U1-U8)
 
 | Id | Decision | Needed for |
 |---|---|---|
 | U1 | Shipping charge per type | Deploy |
 | U2 | GST rate and mode (inclusive or extra); whether the business is GST-registered | Deploy |
-| U3 | Refund windows (see D1) | Policy pages, refund UI |
-| U4 | Commission hold period and clawback rule (see D8); first-purchase-only | Commission payouts |
-| U5 | Email notifications (deferred) | Follow |
+| U3 | Answered (see above): no general refunds | - |
+| U4 | Answered (see above): Rs 25 + Rs 25, no hold, no clawback | - |
+| U5 | Transactional email (not built) | Follow |
 | U6 | Razorpay account, KYC, keys, webhook | Deploy |
-| U7 | Hosting for API and frontend | Deploy |
-| U8 | Guest checkout; can a customer cancel a hard copy before it ships? (current behaviour: login required; cancel means a refund request through the API only) | Follow |
+| U7 | Hosting for API and frontend | Deploy (final stage) |
+| U8 | Guest checkout (current: login required). Customers cannot cancel; an unshipped paid hard copy is cancelled only through an admin exception refund | Follow |
 
 ### Refund and cancellation: current behaviour
 
-- Customers can request a refund through the API only (there is no screen), for any paid order, at any time, with no window. They cannot cancel an order.
-- Admins can approve or reject a request, or refund an order directly ("Refund this order"). Only **full** refunds are possible; the amount always comes from the stored payment.
+- Customers cannot request refunds or cancel orders (no route, no screen). `GET /api/me/refunds` still lists their refunds.
+- Admins can refund an order directly ("Refund this order") for a genuine exception, and can still approve or reject legacy `requested` rows. Only **full** refunds are possible; the amount always comes from the stored payment.
 - An unshipped hard copy can only be cancelled by refunding it (the admin cancel option is refused with `refund_required` for `confirmed`/`processing` orders). Cancelling after shipping (lost parcel) moves no money and leaves the order `paid`.
 - Refunding a shipped hard copy returns the money while the goods stay with the customer; there is no return tracking.
 - Refunding a digital order revokes the code and the reader access it granted, including a gift recipient's access.
-- Nobody is notified (email is deferred).
+- Nobody is notified by email.
 
-### Decisions D1-D10 (recommendations are the engineering suggestion, not agreed policy)
+## 4. Razorpay test-mode verification checklist (NOT YET RUN)
 
-Do **not** build the customer refund screen until D1-D4 are answered.
-
-| Id | Question | Options | Recommendation |
-|---|---|---|---|
-| D1 | Who can request a refund, and until when? | (a) support only; (b) self-service inside a window; (c) self-service any time | **(b)**. Digital: within 7 days of payment and before redemption. Hard copy: instant cancel before dispatch; after delivery, request within 7 days. Requests stay admin-approved. |
-| D2 | Digital refund after the code is redeemed or the book was read? | (a) always refundable; (b) not refundable once redeemed; (c) refundable if fewer than N pages were viewed | **(b)** with an admin override. It is simple to check and avoids revoking a gift recipient. (c) needs page-view logging. |
-| D3 | Hard copy before and after dispatch, and returns? | Before dispatch: (a) instant customer cancel with automatic refund, or (b) admin-approved request. After dispatch: (c) no refunds, (d) refund only after the return is received, (e) refund without return for damage or loss | Before dispatch **(a)**, on `confirmed` only (not `processing`). After dispatch **(d)** by default and **(e)** at admin discretion with photo proof. Needs `return_requested`/`returned` states. |
-| D4 | Shipping charge and partial refunds? | (a) full refund always (today); (b) full before dispatch, book price only after; (c) free-form partial amounts | **(b)** with a single "book only" preset. Avoid free-form partials: they need a multi-refund ledger. This is the largest change; do it only if (b) is chosen. |
-| D5 | GST on refunds | Refund GST pro-rata (automatic while full-only) | No work until U2 is settled; if GST is charged, the accountant decides whether credit notes are needed. |
-| D6 | Refund reason capture | Free text today | Fixed reason list (`not_received`, `damaged`, `wrong_item`, `changed_mind`, `duplicate_purchase`, `other`) plus optional text. |
-| D7 | Self-service button or support only? | | Self-service request button (D1) with manual approval; the instant cancel before dispatch is the one exception (D3). |
-| D8 | Commission clawback after payout (U4) | (a) deduct from the partner's next payout; (b) ask the partner to repay; (c) write off | A hold period equal to the refund window (commission becomes payable only N days after delivery/redemption) plus (a) for the rest. Also: commission on a cancelled order must not be payable. |
-| D9 | Notifications while email is deferred | (a) status in Account/My Books only; (b) build email (U5); (c) manual WhatsApp from admin | **(a)** now, **(b)** before marketing drives volume. |
-| D10 | Gift recipients (digital) | | With D2 (b) the issue disappears; otherwise the policy must state that a refund revokes the reader access granted by the code. |
-
-## 4. Razorpay test-mode verification checklist (not yet run)
-
-Needs the owner's **test** keys. Until every box below is ticked, live payments stay disabled. Nothing in this branch has been exercised against real Razorpay: the Razorpay Checkout popup was replaced by a stub and all payment, webhook and refund tests used the fake gateway.
+The full checklist with a results table is [SP5-razorpay-test-checklist.md](SP5-razorpay-test-checklist.md). No Razorpay credentials exist in the project (only development placeholders), so no row has been run. Needs the owner's **test** keys. Until every box below is ticked, live payments stay disabled. Nothing in this branch has been exercised against real Razorpay: the Razorpay Checkout popup was replaced by a stub and all payment, webhook and refund tests used the fake gateway.
 
 - [ ] Test keys in the server `.env` (`RAZORPAY_GATEWAY=live` with `rzp_test_` keys, and `APP_ENV=production` or a staging value that is not a development value; `fake` is refused outside development). `/api/orders` returns a real `order_...` id and the real Checkout popup opens with the right name and branding.
 - [ ] Successful **card**, **UPI** (`success@razorpay`) and **netbanking** test payments: `/verify` returns 200, the order is `paid`, a digital code is shown, and a hard copy gets a tracking code.
@@ -105,8 +103,8 @@ Needs the owner's **test** keys. Until every box below is ticked, live payments 
 - [ ] Close the tab before the handler runs: the `payment.captured` webhook alone marks the order paid within seconds.
 - [ ] Webhook delivery: the dashboard shows 2xx for `payment.captured` and `payment.failed`; a redelivered event returns `{"status":"duplicate"}`; a wrong secret returns 400. Confirm the `X-Razorpay-Event-Id` header is present on every delivery (the code returns 400 without it).
 - [ ] Auto-capture is ON. Optionally test with it off: the order stays pending and `/verify` returns 202.
-- [ ] Refund through Admin, "Refund this order": note whether test mode returns `processed` immediately or `pending` at normal speed; the `refund.processed` webhook must finalise a `processing` refund. Simulate `refund.failed` if test mode allows.
-- [ ] Refund initiated **in the Razorpay dashboard** for an app order: confirm the app ignores it (known gap F-1). Same for a partial refund from the dashboard.
+- [ ] Exception refund through Admin, "Refund this order": note whether test mode returns `processed` immediately or `pending` at normal speed; the `refund.processed` webhook must finalise a `processing` refund. Simulate `refund.failed` if test mode allows.
+- [ ] Refund initiated **in the Razorpay dashboard** for an app order: confirm the reconciler records it (F-1 is now implemented but unverified against Razorpay). A partial refund from the dashboard must be flagged for an admin, not finalised.
 - [ ] Reconciler: `php scripts/reconcile_orders.php` exits 0 with test keys. Create an order, pay, block the webhook (wrong URL), run the cron after 15 minutes: the order becomes `paid`.
 - [ ] Settlement and fees: check in the dashboard that fees and GST on fees are deducted and whether fees are returned on refund (they normally are not). This feeds decision D4.
 - [ ] Dashboard webhook configuration: URL `https://<api>/api/webhooks/razorpay`, the secret equals `RAZORPAY_WEBHOOK_SECRET`, only the four events are active (`payment.captured`, `payment.failed`, `refund.processed`, `refund.failed`). Test-mode and live-mode webhooks are configured separately.
@@ -116,7 +114,8 @@ Needs the owner's **test** keys. Until every box below is ticked, live payments 
 
 - Razorpay Checkout popup, real payments, real webhooks, real refunds (section 4).
 - The Apache `.htaccess`, the nginx snippet and Netlify/Cloudflare `_redirects` rules were only imitated by a local test server; follow the post-deploy checklist in [frontend-hosting.md](frontend-hosting.md) on the first deploy.
-- The customer refund request was exercised through the API only; there is no screen.
+- Refund reconciliation (lost `refund.processed`, dashboard refunds) was tested against a scripted gateway only.
+- The contact form was tested against a scripted SMTP peer and a local mail catcher, not a real mail provider.
 
 ## 6. Operational notes from the hardening pass
 
@@ -128,7 +127,7 @@ Needs the owner's **test** keys. Until every box below is ticked, live payments 
 - `JWT_SECRET` and `CODE_SECRET` need at least 32 characters and no placeholder in every environment.
 - Error messages name the variable, never its value. `.env.example` defaults to production plus the live gateway with empty keys; the local `backend/.env` sets development plus fake for the test suite.
 
-**Runtime image.** `php:8.2-fpm-trixie` (PHP 8.2.35, Debian 13, Poppler 25.03). Bullseye had been pinned because of a dev-host "exec format error" that no longer occurs. PHP 8.4 was tried and rejected for now: from PHP 8.3, `http_response_code()` stops working once output has started, which breaks two test harnesses (`admin_authz_test`, `middleware_test`) that print before calling controllers. To move to 8.4, add output buffering to those harnesses. PHP 8.2 security support ends 2026-12-31. `mysql:8.0` is unchanged (end of life April 2026; upgrade needs its own plan and a data-volume backup). `nginx:alpine` is a floating tag and should be pinned on the production host. The previous image is kept locally as `vtee-php:bullseye-backup` for rollback.
+**Runtime image.** `php:8.4-fpm-trixie` (PHP 8.4.27, Debian 13, Poppler 25.03). The two test harnesses that broke on PHP 8.3+ (output before `http_response_code()`) were fixed. The previous image is kept locally as `vtee-php:8.2-trixie-rollback`. `mysql:8.0` is unchanged in the dev compose file (end of life April 2026; the production host needs its own plan and a data backup). `nginx:alpine` is a floating tag and should be pinned on the production host.
 
 **New or changed API behaviour.**
 - `render_busy` (503, `Retry-After: 5`) on reader pages and `/access` when a page is being rendered or vanished mid-request; the reader's Retry button covers it.

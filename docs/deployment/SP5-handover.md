@@ -1,14 +1,17 @@
 # SP-5 handover: orders, Razorpay, access codes, reader, refunds, referrals, admin panel
 
-Branch `sp5-orders-codes` (from `master` 459a7bc). Status: implemented, verified locally (fake gateway), **not deployed**.
-Live deployment and the live-site check need hosting access (U7) and the owner's approval; nothing here has been run
-against production. This document contains no secrets: every key below is a variable **name** only.
+Branch `sp5-orders-codes` (from `master` 459a7bc), plus the finalization work on branch `sp5-finalize` (see
+[SP5-PR-description.md](SP5-PR-description.md)). Status: implemented, verified locally (fake gateway), **not deployed**.
+Hosting is a separate final stage; nothing here has been run against production or real Razorpay. This document contains no secrets: every key below is a variable **name** only.
 
 **Read [SP5-premerge-review.md](SP5-premerge-review.md) next.** It lists what the pre-merge hardening pass fixed, every
 item still open before production (policy pages, security headers, lost-refund-webhook handling, watermark limits,
-hosting), the owner decisions (U1-U8 and the refund/cancellation decisions D1-D10), and the Razorpay test-mode checklist.
-**Live payments stay disabled until that checklist has passed with Razorpay test credentials.** Section 12 below was
-written before the hardening pass; rows marked *Fixed* are resolved on this branch.
+hosting), the owner decisions (U1-U8; the refund, commission and email decisions are now answered) and the Razorpay test-mode
+checklist ([SP5-razorpay-test-checklist.md](SP5-razorpay-test-checklist.md), **not yet run**). Configuration:
+[SP5-environments.md](SP5-environments.md). Backup, restore and rollback:
+[SP5-backup-restore-rollback.md](SP5-backup-restore-rollback.md).
+**Live payments stay disabled until the checklist has passed with Razorpay test credentials.** Section 12 below lists
+the known issues; rows marked *Fixed* are resolved on the finalize branch.
 
 ## 1. Features
 
@@ -28,16 +31,25 @@ written before the hardening pass; rows marked *Fixed* are resolved on this bran
   arrow keys, swipe, watermark `Licensed to {email} · {book id}` tiled over the page, no PDF ever sent to the browser.
 - **Hard copies**: tracking code `VTT-XXXXXXXX`, public `/track` page (status, courier, tracking number only), admin
   fulfilment `confirmed → processing → shipped (courier required) → out_for_delivery → delivered`.
-- **Refunds**: customer refund request (API), admin approve/reject or admin-initiated refund; full refunds via
-  Razorpay; on completion digital access is revoked, hard-copy fulfilment cancelled if not shipped, commission reversed
-  (or `clawback_due` if already paid out).
+- **Refunds**: no general refunds for purchased books (owner decision; a no-refund notice with a required
+  acknowledgement is shown on the book page and at checkout). There is no customer refund-request route or screen.
+  Genuine exceptions (duplicate payment, debited-but-failed, legal cases) are handled manually by an admin with
+  "Refund this order" (full refunds via Razorpay). Legacy `requested` refund rows can still be approved or rejected in
+  Admin. A lost `refund.processed` webhook, or a refund made in the Razorpay dashboard, is picked up by the cron
+  reconciler. On completion digital access is revoked, hard-copy fulfilment is cancelled if not shipped and the
+  commission is reversed (or flagged `clawback_due` if it was already paid out; the flag is informational only).
 - **Referral partners**: public application form (`/referral/register`), admin approve/reject (creates `VTP-XXXXXX`
   code), activate/deactivate, edit; flat commission per paid referral order (default ₹25 digital / ₹25 hard copy),
-  `pending → payable → paid` with payout reference, hold while a refund is open.
+  `pending → payable → paid` with payout reference. No hold period and no payout block while a refund is open
+  (owner decision); no clawback or settlement rules.
 - **Admin panel** (`/admin`): dashboard, books (now with description editing), customers, orders (search, filters,
   detail, fulfilment, code verify/revoke/reissue, refund), refunds, referral partners, commissions, pricing and
-  commission settings. Every admin action is written to `audit_logs`.
-- **Customer account** (`/account`): register/login, order list with fulfilment status, log out (added in this task).
+  commission settings. Books: title, description, category and both prices are editable (with field-level errors). Every admin action is written to `audit_logs`.
+- **Customer account** (`/account`): register/login, order list with fulfilment status, log out.
+- **Contact form** (`POST /api/contact`): the home-page form emails the admin over SMTP (honeypot field, 5 per hour per
+  IP, `502 email_failed` if mail cannot be sent, messages are not stored).
+- **Draft policy pages** (`/terms`, `/privacy`, `/refund-policy`, `/digital-access`): text lives in `src/content/policies`
+  and is a draft awaiting owner review; footer links point to them.
 
 ### Retained from SP-4 (unchanged behaviour)
 
@@ -80,8 +92,10 @@ CORS locked to `FRONTEND_ORIGIN`, the marketing home page.
 
 ## 3. Database migrations (apply in this exact order)
 
-**Back up first** (`mysqldump --single-transaction --routines vtee > vtee-before-sp5.sql`) and keep the dump.
-All five files are additive (new tables, new nullable/defaulted columns, one index): no `DROP`, no `DELETE`, no data
+**Back up first** (`mysqldump --single-transaction --routines vtee > vtee-before-sp5.sql`) and keep the dump
+(details: [SP5-backup-restore-rollback.md](SP5-backup-restore-rollback.md)). Run
+`backend/scripts/premigration_checks.sql` first (every query must return zero rows).
+All six files (003-008) are additive (new tables, new nullable/defaulted columns, one index): no `DROP`, no `DELETE`, no data
 rewrite. Existing users, books (ids 1 and 2), uploads and PDFs are preserved. Each file is one-shot: re-running it fails
 on "already exists"/duplicate column and changes nothing.
 
@@ -92,21 +106,25 @@ on "already exists"/duplicate column and changes nothing.
 | 3 | `backend/migrations/005_books_page_count.sql` | `books.page_count` (reader page-count cache) |
 | 4 | `backend/migrations/006_audit_logs_entity_index.sql` | Index `(entity_type, entity_id)` on `audit_logs` for the admin order detail |
 | 5 | `backend/migrations/007_commission_payable_at.sql` | `commissions.payable_at` |
+| 6 | `backend/migrations/008_partner_email_unique.sql` | Unique partner email and one open application per email (generated columns `gmail_key`, `open_gmail`) |
 
 ```bash
 mysql -u <db_user> -p <db_name> < backend/migrations/003_orders_payments.sql
-# then 004, 005, 006, 007 in that order
+# then 004, 005, 006, 007, 008 in that order
 ```
 
 `001_init.sql` and `002_book_management.sql` are already applied on the live database (SP-4); do not re-run them.
+There is no migration 009 (the clawback-settlement migration was removed before release). The way back for each
+migration is `backend/migrations/ROLLBACK.md` (tested on a scratch database); read the warnings in
+[SP5-backup-restore-rollback.md](SP5-backup-restore-rollback.md) first.
 
 ## 4. Modified files
 
 Backend: `backend/src/routes.php`, `Middleware/ErrorHandler.php`, `Controllers/AdminBookController.php` (modified);
 new `Controllers/` (Checkout, Order, Webhook, AccessCode, Track, Reader, Refund, Referral, ReferralApplication,
 Admin{Order,Customer,Dashboard,Code,Refund,Referral,Commission}), `Orders/`, `Razorpay/`, `Codes/`, `Reader/`,
-`Refunds/`, `Referral/`, `Support/{Money,RateLimiter,Settings}.php`; `scripts/reconcile_orders.php`; migrations 003-007;
-`backend/Dockerfile` (adds `poppler-utils`), `backend/nginx/default.conf` (404 rule for `book.pdf`/`pages/` under uploads),
+`Refunds/`, `Referral/`, `Support/{Money,RateLimiter,Settings}.php`; `scripts/reconcile_orders.php`; migrations 003-008;
+`backend/Dockerfile` (php:8.4-fpm-trixie, adds `poppler-utils`), `backend/nginx/default.conf` (404 rule for `book.pdf`/`pages/` under uploads),
 `backend/.env.example`, `backend/README.md` (full API reference), tests under `backend/tests/`.
 
 Frontend: `src/App.jsx`, `src/api/{client,books,orders,admin,reader}.js`, `src/components/checkout/*`,
@@ -127,16 +145,18 @@ Frontend: `src/App.jsx`, `src/api/{client,books,orders,admin,reader}.js`, `src/c
 | `JWT_SECRET` | ≥ 32 random bytes (already set for SP-4; keep the same value or every login expires) |
 | `FRONTEND_ORIGIN` | Exact frontend origin for CORS, e.g. `https://<site-domain>` (one origin, no trailing slash) |
 | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASS` | MySQL connection |
-| `VITE_API_URL` | Frontend **build-time** variable: the public API base URL |
+| `TRUSTED_PROXIES` | Optional. Proxy IPs/CIDRs allowed to set `X-Forwarded-For` for rate limits |
+| `CONTACT_TO_EMAIL`, `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_SECURE` | Contact form mail (`tls` default, `ssl`, or `none` for a local mail catcher only) |
+| `VITE_API_URL` | Frontend **build-time** variable: the public API base URL. The production build fails without it |
 
-These are the only variables the code reads (`grep getenv` over `backend/src`, `backend/scripts`; `import.meta.env`
-over `src`). No SMTP variables: email is deferred.
+Names, purposes and validation rules per environment: [SP5-environments.md](SP5-environments.md). Transactional email
+(order confirmation, code, shipping) is still not implemented; only the contact form sends mail.
 
-## 6. Server deployment steps (PHP 8.2 + MySQL 8 + nginx)
+## 6. Server deployment steps (PHP 8.4 + MySQL 8 + nginx)
 
-1. **Packages**: PHP 8.2 FPM with `pdo_mysql`, `openssl`, `mbstring`, `json`; `poppler-utils` (`pdfinfo`, `pdftoppm`;
-   check `pdftoppm -v`). The dev `backend/Dockerfile` pins Debian bullseye (EOL, uses archive.debian.org): use a
-   supported base (bookworm) for a production image.
+1. **Packages**: PHP 8.4 FPM with `pdo_mysql`, `openssl`, `mbstring`, `json`; `poppler-utils` (`pdfinfo`, `pdftoppm`;
+   check `pdftoppm -v`). `backend/Dockerfile` uses `php:8.4-fpm-trixie` (Debian 13). The previous image is kept as
+   `vtee-php:8.2-trixie-rollback` for rollback.
 2. **Code**: upload `backend/` (not `tests/`, not `.env.example` values). The **web root is `backend/public`**.
    `backend/storage/` must be **outside the web root** (it holds the full PDFs and rendered pages).
 3. **Writable directories** (owned by the PHP-FPM user): `backend/storage/` (incl. `storage/books/{id}/pages/`) and
@@ -149,18 +169,21 @@ over `src`). No SMTP variables: email is deferred.
    (Razorpay webhooks).
 6. **PHP-FPM workers**: the reader renders pages synchronously (up to 30 s per first render of a page). Use at least
    `pm.max_children = 10`; the dev stack's 5 workers can be exhausted by a broken PDF (see section 9).
-7. **Real client IP for rate limits**: limits key on `REMOTE_ADDR`. Behind a proxy/CDN/load balancer configure nginx
-   `real_ip_header X-Forwarded-For; set_real_ip_from <proxy ranges>;` (or the CDN's header) so `REMOTE_ADDR` is the
-   visitor, otherwise every visitor shares one bucket (redeem 20/15 min per IP, track 10/min, referral validate 30/min,
-   **public referral application 5/hour**). Never trust `X-Forwarded-For` from the open internet. IPv6 visitors get
-   one bucket per address; an attacker with a /64 can rotate addresses (consider keying IPv6 on /64 later).
+7. **Real client IP for rate limits**: limits key on `REMOTE_ADDR` unless `TRUSTED_PROXIES` is set. Behind a
+   proxy/CDN/load balancer either configure nginx `real_ip_header X-Forwarded-For; set_real_ip_from <proxy ranges>;`
+   (preferred; commented example in `backend/nginx/default.conf`) or set `TRUSTED_PROXIES`, otherwise every visitor
+   shares one bucket (redeem 20/15 min per IP, track 10/min, referral validate 30/min, public referral application
+   5/hour, contact form 5/hour). `X-Forwarded-For` is trusted only from the listed proxies. IPv6 visitors are
+   bucketed per /64.
 8. **Migrations**: section 3 (backup first).
-9. **`.env`**: section 5, `APP_ENV=production`, `RAZORPAY_GATEWAY=live`.
+9. **`.env`**: section 5, `APP_ENV=production`, `RAZORPAY_GATEWAY=live`; then `php scripts/check_config.php` must
+   exit 0. Do not use the repository `docker-compose.yml` in production (see [SP5-environments.md](SP5-environments.md)).
 10. **Cron** (every 15 minutes, never overlapping):
     ```cron
     */15 * * * * cd /path/to/backend && flock -n /tmp/vtee-reconcile.lock php scripts/reconcile_orders.php >> /var/log/vtee-reconcile.log 2>&1
     ```
-    Exit 0 ok, 2 some orders errored (see log), 1 fatal. It also purges old `rate_limits` rows.
+    Exit 0 ok, 2 some orders errored (see log), 1 fatal. It also finalises refunds whose webhook was lost, flags
+    refunds made outside the app, and purges old `rate_limits` rows.
 11. **Admin user**: `php scripts/seed_admin.php <username> <strong-password>` on the server (≥ 16 random chars; never
     commit or email it; shell history: prefix with a space or clear it). Admin URL: `https://<site-domain>/admin`.
 
@@ -170,7 +193,7 @@ over `src`). No SMTP variables: email is deferred.
 npm ci && VITE_API_URL=https://<live-api-url> npm run build
 ```
 
-Upload the contents of `dist/` (including `.htaccess`) to the site's web root. The SPA fallback for deep links
+The build fails if `VITE_API_URL` is missing or points at localhost. Upload the contents of `dist/` (including `.htaccess`) to the site's web root. The SPA fallback for deep links
 (`/admin`, `/my-books`, `/read/2`, `/track`) ships in the build for Apache (`.htaccess`) and Netlify/Cloudflare
 (`_redirects`); nginx and the rest: see [frontend-hosting.md](frontend-hosting.md). `FRONTEND_ORIGIN` on the API
 must equal this site's origin exactly.
@@ -185,63 +208,77 @@ Only if they are not already on the live site (check `/books` first; **do not cr
 | 1 | போக்சோ சட்டம் (category "Law (Tamil)") | ₹99 / ₹250 | `backend/public/uploads/books/1/cover.jpg` | `backend/public/uploads/books/1/index.pdf` | `backend/storage/books/1/book.pdf` (169 pages) |
 | 2 | POCSO Act: An Easy Complete Guide for All ("Law (English)") | ₹99 / ₹250 | `backend/public/uploads/books/2/cover.jpg` | `backend/public/uploads/books/2/index.pdf` | `backend/storage/books/2/book.pdf` (176 pages) |
 
-Category is not editable in the admin UI yet (title, description and prices are); set it via
-`PUT /api/admin/books/:id` if needed. Description/category text needs the owner's approval (section 11).
+Title, description, category and both prices are editable in the admin UI (the API validates them: non-empty title,
+prices above zero for published books). Description/category text needs the owner's approval (section 11).
 
 ## 9. Razorpay dashboard webhook
 
 Settings → Webhooks → Add: URL `https://<live-api-url>/api/webhooks/razorpay`; secret = `RAZORPAY_WEBHOOK_SECRET`;
 active events **`payment.captured`, `payment.failed`, `refund.processed`, `refund.failed`**. Enable auto-capture.
-Do it first in test mode with test keys, run one digital and one hard-copy purchase and one refund, then switch to
-live keys and a live-mode webhook.
+Do it first in test mode with test keys, run one digital and one hard-copy purchase and one admin exception refund,
+then switch to live keys and a live-mode webhook (only with the owner's approval).
 
 ## 10. Testing results
 
-Full detail and screenshot list: `backend/TEST_RESULTS.md` (section "Final verification").
+Full detail: `backend/TEST_RESULTS.md` (last section: owner decisions pass, PHP 8.4.27, Docker stack, fake gateway,
+`APP_ENV=development`). All suites: 0 failed.
 
-- Automated: all 14 PHP suites, `order_test.sh` 277/277, `book_test.sh` 25/25, `http_test.sh` 23/23, frontend
-  144/144, `npm run build` ok, zero failures.
-- Real browser (Playwright/Chromium, local stack, fake gateway, both real books): flows (a)-(g) and the form-error
-  checks passed; responsive 1280/820/390 px with no horizontal scroll after the fixes in section 2.
-- **Not run**: real Razorpay test mode (keys required, U6); Razorpay's own Checkout popup (the browser runs used a
-  stub `checkout.js` and server-signed fake payments); a customer refund-request UI (none exists, the request was made
-  through the API); live deployment.
+- Backend PHP suites: address_validator 14, admin_authz 99, client_ip 32, codes 60, commission 50, contact 39, jwt 6,
+  middleware 14, money_pricing 14, order_fulfillment 31, race 1, reader 55, reconciler 26, refund 77,
+  signature_gateway 54, upload_validator 3. Shell suites: http_test 23, book_test 52, order_test 289.
+  `scripts/check_config.php` exits 0 (mail items WARN in dev).
+- Frontend: `npm test` 191 tests in 34 files, `npm run build` ok (with `VITE_API_URL` set).
+- Migrations 001-008 applied from scratch and every rollback block run newest first on a scratch database.
+- Earlier real-browser runs (Playwright/Chromium, fake gateway, both real books) passed; the later finalization changes
+  were covered by the automated suites above.
+- **Not run**: real Razorpay test mode (no keys in the project; see the checklist, all rows "Not run"); Razorpay's own
+  Checkout popup (browser runs used a stub `checkout.js`); real SMTP delivery to a production mailbox; live
+  deployment; the Apache/nginx/Netlify host rules on a real host.
 
-## 11. Open business decisions (owner)
+## 11. Business decisions (owner)
+
+Confirmed by the owner (applied in code; do not treat as open):
+
+| Topic | Decision |
+|---|---|
+| Refunds | No general refunds for purchased books. No customer refund-request workflow (route and screen removed). Genuine exceptions (duplicate payment, debited-but-failed, legal cases) are handled manually by an admin with an admin refund. This replaces the earlier D1-D10 refund and cancellation options. |
+| Commission | Rs 25 for an online (digital) order and Rs 25 for a hard-copy order. No hold period. No clawback or settlement rules (the legacy `clawback_due` flag from migration 004 stays as a flag only). |
+| Contact | The contact form emails the admin (`POST /api/contact`); messages are not stored. |
+| Hosting | A separate final stage; not decided or started. |
+
+Still open:
 
 | # | Decision | Current default |
 |---|---|---|
-| U1 | Shipping charge for hard copies (flat/free/per state) | ₹0 (Admin → Settings) |
+| U1 | Shipping charge for hard copies (flat/free/per state) | Rs 0 (Admin, Settings) |
 | U2 | GST rates digital/printed, inclusive or exclusive, GST on shipping, GST invoice | 0 %, inclusive |
-| U3 | Refund policy: who, time windows, opened reader forfeits refund, returns, shipping refunded | Admin discretion, full refunds only |
-| U4 | Commission hold period before payable, first purchase only, payout frequency | No hold (but blocked while a refund is open), manual payout |
 | U6 | Razorpay account: KYC, test + live keys, webhook secret, payment methods, auto-capture | Not provided |
-| U7 | Hosting: HTTPS API URL, Poppler install, cron, PHP-FPM workers, supported base image | Dev only |
+| U7 | Hosting: HTTPS API URL, Poppler install, cron, PHP-FPM workers, supported base image | Not started |
+| - | Review and approval of the four draft policy pages (text in `src/content/policies`) | Draft |
 | - | Approval of book descriptions and categories | Current text on books 1 and 2 |
-| - | Email notifications (order confirmation, code, shipping) | Deferred; nothing is emailed; the UI no longer promises email |
-| U8 | Guest checkout; can a customer cancel a hard copy before it ships? | Login required; cancel = refund request through the API only |
-| D1-D10 | Refund and cancellation policy (windows, redeemed codes, hard-copy returns, partial refunds, commission clawback) | See [SP5-premerge-review.md](SP5-premerge-review.md) section 3 |
+| - | Transactional email (order confirmation, code, shipping) | Not implemented; nothing is emailed about orders; the UI does not promise email |
+| U8 | Guest checkout | Login required |
+| - | Retention of `payment_events.payload` (personal data) and the privacy text (DPDP Act 2023) | Not decided |
 
-## 12. Known issues / pre-deploy hardening
+## 12. Known issues
 
-| Severity | Issue | Suggested fix |
+| Severity | Issue | Note |
 |---|---|---|
-| *Fixed* | Base image `php:8.2-fpm-bullseye` was EOL (packages from archive.debian.org) | Now `php:8.2-fpm-trixie`; MySQL 8.0 / PHP 8.2 end-of-life dates still need a plan (premerge F-11) |
-| *Fixed* (still set `pm.max_children >= 10`) | Reader renderer: blocking `flock` with no timeout + 30 s render could tie up FPM workers | Lock with deadline, failed-page memory, resource limits |
-| *Fixed* | No render size cap | Page-size and resource limits |
-| *Fixed* | Re-uploading a PDF not atomic; stale `page_count` race | Temp file + rename; guarded `page_count` write |
-| Medium | No customer refund-request UI (API exists: `POST /api/me/orders/:id/refund-request`) | Add a "Request refund" button on Account orders, or document that customers contact support and admins use "Refund this order" |
-| *Fixed* | `pdfinfo` "Pages" regex took the first match (a crafted Title could spoof it) | Anchored, last match, bounded |
-| Low | Admin cancel after shipping moves no money; refund must be issued separately | Document for admins; optional prompt to refund |
-| Low | Residual payout race: a refund opened just after the hold check leaves the commission `paid` + `clawback_due` | Re-check under a lock, or accept and handle clawback manually |
-| *Fixed* | Duplicate-partner race (no unique index on partner gmail / application id) | Migration 008 (run the pre-check in `backend/scripts/premigration_checks.sql` first) |
-| Low | Deactivated partner still earns on orders created before deactivation; `clawbackDue` never clears | Business rule (U4); add "clawback settled" action |
-| Low | `/api/track/:code` returns courier + tracking number to anyone holding the code (by design) | Accepted; codes are random 8 chars, rate limited |
+| *Fixed* | Base image was EOL Debian bullseye | `php:8.4-fpm-trixie`; MySQL 8.0 end-of-life still needs a plan for the production host |
+| *Fixed* | Reader renderer could tie up FPM workers; no size cap; non-atomic re-upload; spoofable page count | Lock deadline, resource limits, atomic upload, anchored parsing. Still set `pm.max_children >= 10` |
+| *Fixed* | Duplicate-partner race | Migration 008 (run `backend/scripts/premigration_checks.sql` first) |
+| *Fixed* | Lost `refund.processed` webhook and dashboard refunds were ignored | Refund reconciliation in the cron script; unmatched or partial external refunds are flagged for an admin |
+| *Fixed* | Book category and prices not editable; no validation on update | Editable in Admin with validation; currency of the payment is verified |
+| *Fixed* | `API_BASE_URL` fell back to localhost silently | Production build fails without `VITE_API_URL` |
+| *Fixed* | No security headers on the API / no CSP | API headers in `backend/nginx/default.conf`; CSP in Report-Only mode via `public/_headers` and `public/.htaccess` |
+| *Fixed* | `Authorization` header stripped on Apache/FastCGI | Accepted from the server variables Apache and FastCGI use; `backend/public/.htaccess` ships |
+| Low | Admin cancel after shipping moves no money; a refund must be issued separately | Document for admins |
+| Low | A deactivated partner still earns on orders created before deactivation | Business rule; no clawback rules by decision |
+| Low | `/api/track/:code` returns courier + tracking number to anyone holding the code | By design; random 8-char codes, rate limited |
 | Low | `amount_mismatch` orders stay pending and are re-polled every cron run | Admin resolves manually (README) |
 | Low | Refund list and partner list unpaginated; customer detail shows newest 200 orders | Paginate when volume grows |
-| Low | Refund failure overwrites the admin note; no refund-request rate limit | Keep note history; add a limit |
+| Low | Refund failure overwrites the admin note | Keep note history if needed |
 | Low | ErrorHandler logs PDOException messages (may include values such as an email in a duplicate key) | Sanitise logged messages |
 | Low | Reader index iframe and all 5xx on `/access` shown as "not available yet"; no customer reissue button | UI polish |
-| Low | No partner edit UI (API exists); category not editable in admin books | UI follow-up |
-| Info | Order numbers / payment ids shown to admins include the fake gateway prefix only in dev | n/a |
+| Low | No partner edit UI (API exists) | UI follow-up |
 | Info | Test scripts assume a POSIX shell with `openssl`; on Windows run them from Git Bash | n/a |
