@@ -76,7 +76,6 @@ function CommissionRow({ c, onDone }) {
       <td>{formatRupees(c.amount)}</td>
       <td>
         {c.status}
-        {c.refundOpen && <span className="admin-badge">Refund open</span>}
       </td>
       <td>{c.payoutReference ?? '—'}</td>
       <td>{c.createdAt}</td>

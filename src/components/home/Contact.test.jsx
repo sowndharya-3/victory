@@ -55,7 +55,7 @@ test('client validation blocks the request and shows inline errors', () => {
 })
 
 test('400 field errors show inline and no success', async () => {
-  reply(400, { error: 'validation_error', fields: { email: 'Email looks wrong', message: 'Message too short' } })
+  reply(400, { error: { code: 'validation_error', message: 'Validation failed', fields: { email: 'Email looks wrong', message: 'Message too short' } } })
   render(<Contact />)
   fillValid()
   submit()

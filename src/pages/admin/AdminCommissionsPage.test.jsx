@@ -25,11 +25,10 @@ function setup(rows) {
 }
 
 test('renders commission rows and rates from the API', async () => {
-  setup([commission({ refundOpen: true })])
+  setup([commission()])
   expect(await screen.findByText('VT-0007')).toBeInTheDocument()
   expect(screen.getByText('Ravi')).toBeInTheDocument()
   expect(await screen.findByDisplayValue('30.00')).toBeInTheDocument()
-  expect(screen.getByText(/refund open/i)).toBeInTheDocument()
   expect(screen.getByText('₹60.00')).toBeInTheDocument()
   expect(screen.getByText(/paid \(2\)/i)).toBeInTheDocument()
 })
@@ -44,14 +43,6 @@ test('mark paid requires a payout reference', async () => {
   fireEvent.change(within(tr).getByLabelText(/payout reference/i), { target: { value: 'UPI-123' } })
   fireEvent.click(within(tr).getByRole('button', { name: /mark paid/i }))
   await waitFor(() => expect(paid).toHaveBeenCalledWith(4, 'UPI-123'))
-})
-
-test('refund_open from the server is shown', async () => {
-  setup([commission({ status: 'pending' })])
-  vi.spyOn(adminApi, 'markCommissionPayable').mockRejectedValue(Object.assign(new Error('x'), { status: 409, code: 'refund_open' }))
-  const tr = (await screen.findByText('VT-0007')).closest('tr')
-  fireEvent.click(within(tr).getByRole('button', { name: /mark payable/i }))
-  expect(await screen.findByText(/open refund/i)).toBeInTheDocument()
 })
 
 test('saving rates sends strings', async () => {

@@ -1,6 +1,6 @@
 import { API_BASE_URL, retryAfterSeconds } from './client'
 
-// POST /api/contact -> 200 {ok:true} | 400 {error:'validation_error', fields} | 429 | 502 {error:'email_failed'}.
+// POST /api/contact -> 200 {ok:true} | 400 {error:{code:'validation_error', fields}} | 429 | 502 {error:{code:'email_failed'}}.
 // Resolves only on 200 {ok:true}; every other outcome (including network errors) throws an error with
 // `status` (0 for network), `code`, `fields` and `retryAfter`.
 export async function sendContact(payload) {
@@ -19,7 +19,7 @@ export async function sendContact(payload) {
   throw Object.assign(new Error('contact failed'), {
     status: res.ok ? 502 : res.status,
     code: typeof data?.error === 'string' ? data.error : data?.error?.code,
-    fields: data?.fields,
+    fields: data?.error?.fields ?? data?.fields,
     retryAfter: retryAfterSeconds(res),
   })
 }

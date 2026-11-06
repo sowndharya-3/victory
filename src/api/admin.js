@@ -34,7 +34,6 @@ export function formatRupees(x) {
 
 const CODE_MESSAGES = {
   refund_required: 'This order has not shipped yet, so it cannot be cancelled. Refund it instead.',
-  refund_open: 'This order has an open refund. Resolve the refund first.',
   invalid_transition: 'That change is not allowed from the current status. Reload and try again.',
   rate_limited: 'Too many attempts. Wait a few minutes and try again.',
   not_refundable: 'This order cannot be refunded.',
