@@ -59,7 +59,7 @@ The application user needs only the privileges on its own database (SELECT, INSE
 | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASS` | MySQL connection | Required | `DB_PASS` 12 or more characters outside development, not a placeholder (section 1) |
 | `FRONTEND_ORIGIN` | The one allowed CORS origin | Required | Bare origin: `scheme://host[:port]`, no path, no trailing slash; must be `https` outside development. Must equal the site's origin exactly (`https://example.com` and `https://www.example.com` differ) |
 | `TRUSTED_PROXIES` | Comma list of proxy IPs/CIDRs allowed to set `X-Forwarded-For` for rate limits | Optional | Empty means rate limits use `REMOTE_ADDR`. Invalid entries are ignored (counted by `check_config.php`). Prefer fixing `REMOTE_ADDR` in the web server (`set_real_ip_from`) |
-| `CONTACT_TO_EMAIL` | Mailbox that receives contact-form enquiries | Required for the contact form | Valid email address (FAIL outside development if missing) |
+| `CONTACT_TO_EMAIL` | Mailbox that receives contact-form enquiries | Required for the contact form | Valid email address (FAIL outside development if missing). Confirmed by the owner: `info@victorytodayeducation.com`. SMTP host and credentials are still to be supplied and set only in the server `.env` |
 | `MAIL_FROM` | Sender address, a mailbox on the site's domain | Required for the contact form | Valid email address. The visitor is only put in Reply-To |
 | `SMTP_HOST` | SMTP server | Required for the contact form | Non-empty |
 | `SMTP_PORT` | SMTP port | Optional | Number; default 587 |
