@@ -51,7 +51,7 @@ Refund reconciliation for lost webhooks and dashboard refunds (F-1); API securit
 | F-4 | Rate limits and proxies. *Fixed in code.* `TRUSTED_PROXIES` (or nginx `set_real_ip_from`) gives the real visitor IP; IPv6 is bucketed per /64. The deployer must still configure one of them if a proxy/CDN sits in front. | Eng + Owner (hosting) | At hosting time. |
 | F-5 | Commission. Decided: Rs 25 online and Rs 25 hard copy, no hold period. Admin-approved exception refunds do NOT reverse or claw back commission: commission statuses are untouched and finalising a refund writes audit row `refund.commission_unchanged`. `clawback_due` is a legacy column that nothing sets or shows; `reversed` status and columns are unused; no migration 009. Remaining by design: a hard copy cancelled after shipping keeps its commission; a deactivated partner still earns on orders created before deactivation. | Owner decided | None. |
 | F-6 | Duplicate payment on an already-paid order is flagged (`admin_flag`). Per the owner's decision it is a genuine exception: an admin refunds it with "Refund this order" (or from the Razorpay dashboard, which the reconciler then records). | Admin runbook | |
-| F-7 | Transactional email is not implemented: refunds, revocations and shipments are silent to the customer, and the policy text must say status is shown in Account and My Books. The contact form does send mail to the admin (SMTP). | Owner | Follow |
+| F-7 | Transactional email is deliberately not built (owner decision): refunds, revocations and shipments are silent to the customer, and the policy text must say status is shown in Account and My Books. The contact form does send mail to the admin (SMTP). | Owner | Follow |
 | F-8 | Customer refund-request screen. *Closed by decision:* there is no customer refund-request workflow; the route was removed. | Owner decided | None. |
 | F-9 | Smaller items. *Fixed:* category and price editing in Admin, price/title validation on update, payment currency check, `VITE_API_URL` missing at build time (the production build now fails). *Still open:* admin lists unpaginated, partner edit UI, reader index iframe has no sandbox, JWT has no `nbf`/`iss`/`aud` and no server-side revocation, test CLI helpers lack a `PHP_SAPI` guard. | Eng | Follow |
 | F-11 | **Runtime versions.** PHP is now 8.4 (security support to 2028-12-31; verify the date); the image used before is kept as `vtee-php:8.2-trixie-rollback`. `mysql:8.0` in the dev compose file reached end of life in April 2026 (verify): the production host should use a supported MySQL (8.4 LTS) or MariaDB, tested with migrations 001-008 and the suites. | Eng | Production host decides. |
@@ -85,7 +85,7 @@ The checkout and book page show a no-refund notice, and checkout requires an ack
 | U2 | GST rate and mode (inclusive or extra); whether the business is GST-registered | Deploy |
 | U3 | Answered (see above): no general refunds | - |
 | U4 | Answered (see above): Rs 25 + Rs 25, no hold, no reversal or clawback | - |
-| U5 | Transactional email (not built) | Follow |
+| U5 | Transactional email: decided not to build | Closed |
 | U6 | Razorpay account, KYC, keys, webhook | Deploy |
 | U7 | Hosting for API and frontend | Deploy (final stage) |
 | U8 | Guest checkout (current: login required). Customers cannot cancel; an unshipped paid hard copy is cancelled only through an admin exception refund | Follow |
@@ -168,7 +168,7 @@ Shipping charges and GST are not decided, and none have been assumed. The settin
 
 1. Shipping charge for a hardcopy order (a flat amount, or a rule such as by weight or region) and whether digital orders carry any charge.
 2. GST rate for digital books and for printed books, and whether book prices already include GST (`inclusive`) or GST is added on top (`exclusive`).
-3. Whether GST also applies to the shipping charge, and whether GST invoices are required.
+3. Whether GST also applies to the shipping charge, (customer GST invoices are not required, by owner decision, and are not generated).
 4. The delivery areas served and the delivery time wording, if any is to be shown. No delivery times are promised on the site today.
 5. The courier or couriers used, so admins know what to enter as courier and tracking number.
 

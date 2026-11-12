@@ -152,7 +152,7 @@ Frontend: `src/App.jsx`, `src/api/{client,books,orders,admin,reader}.js`, `src/c
 | `VITE_API_URL` | Frontend **build-time** variable: the public API base URL. The production build fails without it |
 
 Names, purposes and validation rules per environment: [SP5-environments.md](SP5-environments.md). Transactional email
-(order confirmation, code, shipping) is still not implemented; only the contact form sends mail.
+(order confirmation, payment success, admin new-order) is deliberately not built (owner decision); only the contact form sends mail.
 
 ## 6. Server deployment steps (PHP 8.4 + MySQL 8 + nginx)
 
@@ -259,13 +259,13 @@ Still open:
 | # | Decision | Current default |
 |---|---|---|
 | U1 | Shipping charge for hard copies (flat/free/per state) | Rs 0 (Admin, Settings) |
-| U2 | GST rates digital/printed, inclusive or exclusive, GST on shipping, GST invoice | 0 %, inclusive |
+| U2 | GST rates digital/printed, inclusive or exclusive, GST on shipping. Decided: customers do not need a GST invoice, so none is generated or sent (Razorpay's own fee invoices are separate). Rate and inclusion still to be confirmed | 0 %, inclusive (placeholders unchanged) |
 | U6 | Razorpay account: KYC, test + live keys, webhook secret, payment methods, auto-capture | Not provided |
 | U7 | Hosting: HTTPS API URL, Poppler install, cron, PHP-FPM workers, supported base image | Not started |
 | - | Review and approval of the four draft policy pages (text in `src/content/policies`) | Draft |
 | - | Approval of book descriptions and categories | Current text on books 1 and 2 |
 | - | Unverified homepage claims | Removed on the owner's instruction: world-class, retired professors, 24x7 availability, free one-to-one counselling, and the founder titles (Founder Chairman, PhD in Education). The business can re-add any claim it later verifies |
-| - | Transactional email (order confirmation, code, shipping) | Not implemented; nothing is emailed about orders; the UI does not promise email |
+| - | Transactional email (order confirmation, payment success, admin new-order) | Decided not to build: nothing is emailed about orders; the UI does not promise email. Only the contact form sends mail (SMTP delivery still to be tested) |
 | U8 | Guest checkout | Login required |
 | - | Retention of `payment_events.payload` (personal data) and the privacy text (DPDP Act 2023) | Not decided |
 

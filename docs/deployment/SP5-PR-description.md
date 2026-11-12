@@ -58,6 +58,7 @@ Not deployed. Not tested against real Razorpay. Live payments must stay disabled
 - `sp5-finalize` is the PR head, base `master`.
 - No general refunds for purchased books and no customer refund-request workflow. Genuine exceptions (duplicate payment, debited-but-failed, legal cases) are refunded manually by an admin only.
 - Refunds do not reverse or claw back commission. Commission statuses are untouched. `clawback_due` is a legacy column that nothing sets or shows; the `reversed` status and columns stay unused. No migration 009. No payout hold. Rs 25 online and Rs 25 hard copy.
+- No customer GST invoice and no order-related emails (confirmation, payment success, admin new-order) are built, by owner decision; Razorpay's fee invoices are separate. The legacy `commissions.clawback_due` column is kept unchanged.
 - Contact enquiries are emailed to the admin and not stored in the database; a failure is shown honestly to the visitor.
 - Policy pages stay drafts until business approval.
 - Razorpay live credentials are reserved for the final production deployment stage. The real test-mode run waits for `rzp_test_` keys in the staging `.env`.
