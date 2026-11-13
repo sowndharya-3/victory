@@ -1,6 +1,6 @@
 # SPA fallback for Apache / shared hosting (Hostinger, cPanel). Vite copies this file into dist/.
 # Deep links like /admin/orders or /read/2 have no file on disk; serve index.html and let React Router route.
-# The API lives on another origin (VITE_API_URL), so nothing here proxies or rewrites /api.
+# The API is either on another origin (VITE_API_URL) or on this host under /api (see below).
 # Every directive is wrapped in <IfModule>, so a host without a module serves the site rather than a 500.
 
 <IfModule mod_rewrite.c>
@@ -12,6 +12,11 @@
   RewriteRule ^ - [L]
   # A missing bundle must 404, not return HTML (a stale tab would hit a confusing MIME error instead).
   RewriteRule ^assets/ - [L]
+  # Same-host API (Hostinger layout, docs/deployment/hostinger-deploy.md): public_html/api is a symlink to
+  # vtee-backend/public and has its own .htaccess. Harmless when the API is on another origin (no /api path exists).
+  RewriteRule ^api/ - [L]
+  # Book covers/index files are written by the API under its public/uploads; serve them from /uploads too.
+  RewriteRule ^uploads/(.*)$ api/uploads/$1 [L]
   RewriteRule ^ index.html [L]
 </IfModule>
 
