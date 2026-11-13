@@ -3,37 +3,6 @@ import { SessionProvider, useSession } from './SessionContext'
 
 const wrapper = ({ children }) => <SessionProvider>{children}</SessionProvider>
 
-test('CREATE_ORDER then MARK_ORDER_PAID grants access', () => {
-  const { result } = renderHook(() => useSession(), { wrapper })
-
-  act(() => {
-    result.current.dispatch({
-      type: 'CREATE_ORDER',
-      payload: { bookId: 'b1', customerEmail: 'a@b.com', purchaseType: 'digital', amount: 199, referralPartnerId: 'r1' },
-    })
-  })
-  const created = result.current.state.orders[0]
-  expect(created.paymentStatus).toBe('pending')
-
-  act(() => {
-    result.current.dispatch({ type: 'MARK_ORDER_PAID', payload: { orderId: created.id } })
-  })
-  expect(result.current.state.orders[0].paymentStatus).toBe('paid')
-})
-
-test('REGISTER_REFERRAL adds a pending, unapproved partner', () => {
-  const { result } = renderHook(() => useSession(), { wrapper })
-  act(() => {
-    result.current.dispatch({
-      type: 'REGISTER_REFERRAL',
-      payload: { name: 'New Partner', qualification: 'B.Sc', place: 'Erode', district: 'Erode', status: 'Student', phone: '900', whatsapp: '900', upiId: 'x@y', gmail: 'x@y.com' },
-    })
-  })
-  const added = result.current.state.referralPartners.at(-1)
-  expect(added.approved).toBe(false)
-  expect(added.referralCode).toMatch(/^VTP-/)
-})
-
 test('LOGIN_CUSTOMER sets customerEmail', () => {
   const { result } = renderHook(() => useSession(), { wrapper })
   act(() => {
@@ -72,152 +41,14 @@ test('LOGOUT_ADMIN clears admin', () => {
   expect(result.current.state.admin).toBe(null)
 })
 
-test('APPROVE_REFERRAL approves and activates only the targeted partner', () => {
+test('session holds auth state only; no source reads mock orders/books/referrals from it', () => {
   const { result } = renderHook(() => useSession(), { wrapper })
-  // Target r2 (seed approved:false, active:false — the opposite of the post-approve state,
-  // so a no-op/deleted-case reducer fails assertion 1). Control r1 is checked by reference
-  // identity, not just value: the correct reducer's ternary returns the exact same object for
-  // non-matching items, so a reducer that leaked the effect to every partner (mapping
-  // unconditionally) would fail assertion 2 even though r1's values happen to already match.
-  const initialR1 = result.current.state.referralPartners.find(p => p.id === 'r1')
-  act(() => {
-    result.current.dispatch({ type: 'APPROVE_REFERRAL', payload: { id: 'r2' } })
-  })
-  const r2 = result.current.state.referralPartners.find(p => p.id === 'r2')
-  const r1 = result.current.state.referralPartners.find(p => p.id === 'r1')
-  expect(r2.approved).toBe(true)
-  expect(r2.active).toBe(true)
-  expect(r1).toBe(initialR1) // untouched — same object reference, not just equal values
-})
-
-test('REJECT_REFERRAL rejects only the targeted partner', () => {
-  const { result } = renderHook(() => useSession(), { wrapper })
-  // Target r1 (seed approved:true, active:true — the opposite of the post-reject state, so a
-  // no-op/deleted-case reducer fails assertion 1). Control r2 is checked by reference identity:
-  // a reducer that leaked the effect to every partner (mapping unconditionally) would fail
-  // assertion 2 even though r2's values happen to already match.
-  const initialR2 = result.current.state.referralPartners.find(p => p.id === 'r2')
-  act(() => {
-    result.current.dispatch({ type: 'REJECT_REFERRAL', payload: { id: 'r1' } })
-  })
-  const r1 = result.current.state.referralPartners.find(p => p.id === 'r1')
-  const r2 = result.current.state.referralPartners.find(p => p.id === 'r2')
-  expect(r1.approved).toBe(false)
-  expect(r1.active).toBe(false)
-  expect(r2).toBe(initialR2) // untouched — same object reference, not just equal values
-})
-
-test('TOGGLE_REFERRAL_ACTIVE flips only the targeted partner active flag', () => {
-  const { result } = renderHook(() => useSession(), { wrapper })
-  act(() => {
-    result.current.dispatch({ type: 'TOGGLE_REFERRAL_ACTIVE', payload: { id: 'r1' } })
-  })
-  const r1 = result.current.state.referralPartners.find(p => p.id === 'r1')
-  const r2 = result.current.state.referralPartners.find(p => p.id === 'r2')
-  expect(r1.active).toBe(false) // seed was true
-  expect(r2.active).toBe(false) // untouched, seed was false
-})
-
-test('ADD_BOOK appends an unpublished book', () => {
-  const { result } = renderHook(() => useSession(), { wrapper })
-  const before = result.current.state.books.length
-  act(() => {
-    result.current.dispatch({ type: 'ADD_BOOK', payload: { title: 'New Book', onlinePrice: 99, hardCopyPrice: 199 } })
-  })
-  expect(result.current.state.books.length).toBe(before + 1)
-  const added = result.current.state.books.at(-1)
-  expect(added.title).toBe('New Book')
-  expect(added.published).toBe(false)
-})
-
-test('UPDATE_BOOK merges changes into only the targeted book', () => {
-  const { result } = renderHook(() => useSession(), { wrapper })
-  act(() => {
-    result.current.dispatch({ type: 'UPDATE_BOOK', payload: { id: 'b1', changes: { title: 'Updated Title' } } })
-  })
-  const b1 = result.current.state.books.find(b => b.id === 'b1')
-  const b2 = result.current.state.books.find(b => b.id === 'b2')
-  expect(b1.title).toBe('Updated Title')
-  expect(b2.title).not.toBe('Updated Title')
-})
-
-test('DELETE_BOOK removes only the targeted book', () => {
-  const { result } = renderHook(() => useSession(), { wrapper })
-  const before = result.current.state.books.length
-  act(() => {
-    result.current.dispatch({ type: 'DELETE_BOOK', payload: { id: 'b1' } })
-  })
-  expect(result.current.state.books.length).toBe(before - 1)
-  expect(result.current.state.books.find(b => b.id === 'b1')).toBeUndefined()
-  expect(result.current.state.books.find(b => b.id === 'b2')).toBeDefined()
-})
-
-test('TOGGLE_PUBLISH flips only the targeted book published flag', () => {
-  const { result } = renderHook(() => useSession(), { wrapper })
-  act(() => {
-    result.current.dispatch({ type: 'TOGGLE_PUBLISH', payload: { id: 'b1' } })
-  })
-  const b1 = result.current.state.books.find(b => b.id === 'b1')
-  const b2 = result.current.state.books.find(b => b.id === 'b2')
-  expect(b1.published).toBe(false) // seed was true
-  expect(b2.published).toBe(true) // untouched, seed was true
-})
-
-test('CREATE_ORDER snapshots commission from the current rate for a digital order with a partner', () => {
-  const { result } = renderHook(() => useSession(), { wrapper })
-  act(() => {
-    result.current.dispatch({
-      type: 'CREATE_ORDER',
-      payload: { bookId: 'b1', customerEmail: 'a@b.com', purchaseType: 'digital', amount: 199, referralPartnerId: 'r1' },
-    })
-  })
-  expect(result.current.state.orders.at(-1).commission).toBe(25) // seed digital rate
-})
-
-test('CREATE_ORDER snapshots commission from the current rate for a hardcopy order with a partner', () => {
-  const { result } = renderHook(() => useSession(), { wrapper })
-  act(() => {
-    result.current.dispatch({ type: 'SET_COMMISSION_RATE', payload: { hardcopy: 40 } })
-  })
-  act(() => {
-    result.current.dispatch({
-      type: 'CREATE_ORDER',
-      payload: { bookId: 'b1', customerEmail: 'a@b.com', purchaseType: 'hardcopy', amount: 349, referralPartnerId: 'r1' },
-    })
-  })
-  expect(result.current.state.orders.at(-1).commission).toBe(40)
-})
-
-test('CREATE_ORDER commission is 0 when there is no referral partner', () => {
-  const { result } = renderHook(() => useSession(), { wrapper })
-  act(() => {
-    result.current.dispatch({
-      type: 'CREATE_ORDER',
-      payload: { bookId: 'b1', customerEmail: 'a@b.com', purchaseType: 'digital', amount: 199, referralPartnerId: null },
-    })
-  })
-  expect(result.current.state.orders.at(-1).commission).toBe(0)
-})
-
-test('CREATE_ORDER commission is not affected by a LATER rate change', () => {
-  const { result } = renderHook(() => useSession(), { wrapper })
-  act(() => {
-    result.current.dispatch({
-      type: 'CREATE_ORDER',
-      payload: { bookId: 'b1', customerEmail: 'a@b.com', purchaseType: 'digital', amount: 199, referralPartnerId: 'r1' },
-    })
-  })
-  act(() => {
-    result.current.dispatch({ type: 'SET_COMMISSION_RATE', payload: { digital: 99 } })
-  })
-  expect(result.current.state.orders.at(-1).commission).toBe(25)
-})
-
-test('SET_COMMISSION_RATE merges into commissionRate without dropping other keys', () => {
-  const { result } = renderHook(() => useSession(), { wrapper })
-  act(() => {
-    result.current.dispatch({ type: 'SET_COMMISSION_RATE', payload: { digital: 30 } })
-  })
-  expect(result.current.state.commissionRate.digital).toBe(30)
-  expect(result.current.state.commissionRate.hardcopy).toBe(25) // untouched
+  expect(Object.keys(result.current.state).sort()).toEqual(['admin', 'customerEmail'])
+  const sources = import.meta.glob('/src/**/*.jsx', { query: '?raw', import: 'default', eager: true })
+  expect(Object.keys(sources).length).toBeGreaterThan(20)
+  const offenders = Object.entries(sources)
+    .filter(([path]) => !path.endsWith('.test.jsx'))
+    .filter(([, code]) => /state\.(orders|books|referralPartners|commissionRate)/.test(code))
+    .map(([path]) => path)
+  expect(offenders).toEqual([])
 })

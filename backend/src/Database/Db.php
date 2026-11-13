@@ -25,4 +25,11 @@ class Db
         }
         return self::$instance;
     }
+
+    /** True when $e is MySQL 1062 (SQLSTATE 23000) on unique key $key (the key name ends the message). */
+    public static function isDuplicateKey(\PDOException $e, string $key): bool
+    {
+        return ($e->errorInfo[1] ?? null) === 1062
+            && preg_match("/ for key '(?:[^']*\\.)?" . preg_quote($key, '/') . "'\\z/", (string) ($e->errorInfo[2] ?? ''));
+    }
 }

@@ -1,34 +1,21 @@
 import { createContext, useContext, useEffect, useReducer } from 'react'
-import { seedBooks } from '../data/books'
-import { seedReferralPartners } from '../data/referralPartners'
 
 const STORAGE_KEY = 'vtee-session'
 
-const seedState = {
-  customerEmail: null,
-  admin: null,
-  books: seedBooks,
-  referralPartners: seedReferralPartners,
-  orders: [],
-  commissionRate: { digital: 25, hardcopy: 25 },
-}
+// Auth state only: orders, books, referrals and commissions come from the PHP API.
+const seedState = { customerEmail: null, admin: null }
 
-// ponytail: single-user mock demo — persist the whole reducer state as-is,
-// no merge with fresh seed data needed.
 function loadInitialState() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return seedState
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? parsed : seedState
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY))
+    // Older builds persisted mock orders/books here: keep only the auth keys.
+    return parsed && typeof parsed === 'object'
+      ? { customerEmail: parsed.customerEmail ?? null, admin: parsed.admin ?? null }
+      : seedState
   } catch {
     return seedState
   }
 }
-
-let nextOrderId = 1
-let nextPartnerId = seedReferralPartners.length + 1
-let nextBookId = seedBooks.length + 1
 
 function reducer(state, action) {
   switch (action.type) {
@@ -40,80 +27,6 @@ function reducer(state, action) {
       return { ...state, admin: { username: action.payload.username } }
     case 'LOGOUT_ADMIN':
       return { ...state, admin: null }
-
-    case 'REGISTER_REFERRAL': {
-      const partner = {
-        ...action.payload,
-        id: `r${nextPartnerId++}`,
-        referralCode: `VTP-R${nextPartnerId - 1}`,
-        approved: false,
-        active: false,
-      }
-      return { ...state, referralPartners: [...state.referralPartners, partner] }
-    }
-    case 'APPROVE_REFERRAL':
-      return {
-        ...state,
-        referralPartners: state.referralPartners.map(p =>
-          p.id === action.payload.id ? { ...p, approved: true, active: true } : p
-        ),
-      }
-    case 'REJECT_REFERRAL':
-      return {
-        ...state,
-        referralPartners: state.referralPartners.map(p =>
-          p.id === action.payload.id ? { ...p, approved: false, active: false } : p
-        ),
-      }
-    case 'TOGGLE_REFERRAL_ACTIVE':
-      return {
-        ...state,
-        referralPartners: state.referralPartners.map(p =>
-          p.id === action.payload.id ? { ...p, active: !p.active } : p
-        ),
-      }
-
-    case 'ADD_BOOK': {
-      const book = { ...action.payload, id: `b${nextBookId++}`, published: false }
-      return { ...state, books: [...state.books, book] }
-    }
-    case 'UPDATE_BOOK':
-      return {
-        ...state,
-        books: state.books.map(b => (b.id === action.payload.id ? { ...b, ...action.payload.changes } : b)),
-      }
-    case 'DELETE_BOOK':
-      return { ...state, books: state.books.filter(b => b.id !== action.payload.id) }
-    case 'TOGGLE_PUBLISH':
-      return {
-        ...state,
-        books: state.books.map(b => (b.id === action.payload.id ? { ...b, published: !b.published } : b)),
-      }
-
-    case 'CREATE_ORDER': {
-      // Snapshot commission at the CURRENT rate, at creation time — a later rate
-      // change must not retroactively change what a past order's commission was.
-      const commission = action.payload.referralPartnerId
-        ? (action.payload.purchaseType === 'digital' ? state.commissionRate.digital : state.commissionRate.hardcopy)
-        : 0
-      const order = {
-        ...action.payload,
-        id: `o${nextOrderId++}`,
-        paymentStatus: 'pending',
-        date: new Date().toISOString(),
-        commission,
-      }
-      return { ...state, orders: [...state.orders, order] }
-    }
-    case 'MARK_ORDER_PAID':
-      return {
-        ...state,
-        orders: state.orders.map(o => (o.id === action.payload.orderId ? { ...o, paymentStatus: 'paid' } : o)),
-      }
-
-    case 'SET_COMMISSION_RATE':
-      return { ...state, commissionRate: { ...state.commissionRate, ...action.payload } }
-
     default:
       return state
   }

@@ -83,6 +83,28 @@ curl -s -X PUT "$BASE_URL/api/admin/books/$BOOK_ID" -H "Authorization: Bearer $A
 EDITED_LIST=$(curl -s "$BASE_URL/api/books")
 check "edited title appears in public list" "$(echo "$EDITED_LIST" | grep -q '"title":"Edited Title"' && echo true || echo false)"
 
+echo "=== 7b. Update validates like create ==="
+put_book() { curl -s -o /tmp/book_put.json -w "%{http_code}" -X PUT "$BASE_URL/api/admin/books/$BOOK_ID" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d "$1"; }
+check "admin edit (title + multi-line description) -> 200" "$([ "$(put_book '{"title":"  Edited Title  ","description":"Line one\nLine two\tTabbed"}')" = "200" ] && grep -q '"title":"Edited Title","description":"Line one\\nLine two\\tTabbed"' /tmp/book_put.json && echo true || echo false)"
+LONG=$(printf 'x%.0s' $(seq 1 256))
+for body in '{"title":""}' '{"title":"   "}' "{\"title\":\"$LONG\"}" '{"title":"Bell\u0007"}' '{"title":"Two\nLines"}' '{"title":123}' '{"category":"Esc\u001b[31m"}' '{"description":"NUL\u0000"}' '{"description":["x"]}' \
+            '{"onlinePrice":-1}' '{"onlinePrice":"abc"}' '{"onlinePrice":1.234}' '{"hardcopyPrice":100000.01}' '{"hardcopyPrice":"1e3"}' '{"onlinePrice":null}' '{"onlinePrice":0}' '{"hardcopyPrice":"0.99"}' '[1]' 'null'; do
+  check "update rejects $(echo "$body" | cut -c1-40) with 400 validation_error" "$([ "$(put_book "$body")" = "400" ] && grep -q '"code":"validation_error"' /tmp/book_put.json && echo true || echo false)"
+done
+check "rejected updates changed nothing" "$(curl -s "$BASE_URL/api/admin/books/$BOOK_ID" -H "Authorization: Bearer $ADMIN_TOKEN" | grep -q '"title":"Edited Title","description":"Line one\\nLine two\\tTabbed","category":null,"onlinePrice":199,"hardcopyPrice":349' && echo true || echo false)"
+check "update price \"249.50\" -> 200, stored 249.5" "$([ "$(put_book '{"onlinePrice":"249.50","hardcopyPrice":100000}')" = "200" ] && grep -q '"onlinePrice":249.5,"hardcopyPrice":100000' /tmp/book_put.json && echo true || echo false)"
+bsql() { docker compose exec -T mysql mysql -u vtee -pchangeme vtee -N -e "$1" 2>/dev/null; }
+check "price change audited as book.price old -> new" "$([ "$(bsql "SELECT CONCAT_WS('|', admin_id IS NOT NULL, JSON_UNQUOTE(JSON_EXTRACT(detail,'\$.onlinePrice.from')), JSON_UNQUOTE(JSON_EXTRACT(detail,'\$.onlinePrice.to')), JSON_UNQUOTE(JSON_EXTRACT(detail,'\$.hardcopyPrice.from')), JSON_UNQUOTE(JSON_EXTRACT(detail,'\$.hardcopyPrice.to'))) FROM audit_logs WHERE action='book.price' AND entity_type='book' AND entity_id=$BOOK_ID ORDER BY id DESC LIMIT 1")" = "1|199.00|249.50|349.00|100000.00" ] && echo true || echo false)"
+put_book '{"onlinePrice":199,"hardcopyPrice":349}' >/dev/null
+check "same-price update writes no audit row; price restore audited (2 book.price rows)" "$([ "$(put_book '{"onlinePrice":"199.00"}')" = "200" ] && [ "$(bsql "SELECT COUNT(*) FROM audit_logs WHERE action='book.price' AND entity_id=$BOOK_ID")" = "2" ] && echo true || echo false)"
+check "category set then cleared via update" "$([ "$(put_book '{"category":"  Law (English)  "}')" = "200" ] && grep -q '"category":"Law (English)"' /tmp/book_put.json && [ "$(put_book '{"category":""}')" = "200" ] && grep -q '"category":null' /tmp/book_put.json && echo true || echo false)"
+CREATE_BAD=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/admin/books" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d '{"title":"Bad","onlinePrice":-5,"hardcopyPrice":10}')
+check "create with a negative price -> 400" "$([ "$CREATE_BAD" = "400" ] && echo true || echo false)"
+ZERO=$(curl -s -X POST "$BASE_URL/api/admin/books" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d '{"title":"Book Test Zero Price","onlinePrice":0,"hardcopyPrice":0}' | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
+ZERO_PUB=$(curl -s -o /tmp/book_put.json -w "%{http_code}" -X POST "$BASE_URL/api/admin/books/$ZERO/publish" -H "Authorization: Bearer $ADMIN_TOKEN")
+check "draft with price 0 can be created, but publish -> 400" "$([ -n "$ZERO" ] && [ "$ZERO_PUB" = "400" ] && grep -q '"onlinePrice"' /tmp/book_put.json && echo true || echo false)"
+curl -s -X POST "$BASE_URL/api/admin/books/$ZERO/archive" -H "Authorization: Bearer $ADMIN_TOKEN" >/dev/null
+
 echo "=== 8. Unpublish removes from public list ==="
 curl -s -X POST "$BASE_URL/api/admin/books/$BOOK_ID/unpublish" -H "Authorization: Bearer $ADMIN_TOKEN" >/dev/null
 AFTER_UNPUBLISH=$(curl -s "$BASE_URL/api/books")

@@ -2,3 +2,11 @@
 .superpowers/
 node_modules/
 dist/
+docs/deployment/screenshots-private/
+
+# secrets and local artefacts
+.env
+.env.*
+!.env.example
+*.zip
+.playwright-mcp/

@@ -1,4 +1,15 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080'
+export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080'
+
+// The API returns upload paths like "/uploads/books/2/cover.jpg"; they live on the API host, not the frontend's.
+export function assetUrl(path) {
+  return typeof path === 'string' && path.startsWith('/') ? `${API_BASE_URL}${path}` : path
+}
+
+// Retry-After in seconds (the API sends whole seconds); undefined when absent or not a number.
+export function retryAfterSeconds(res) {
+  const n = Number(res.headers?.get?.('Retry-After'))
+  return Number.isFinite(n) && n >= 0 && res.headers.get('Retry-After') !== '' ? n : undefined
+}
 
 export async function apiRequest(path, { method = 'GET', body, token } = {}) {
   const headers = { 'Content-Type': 'application/json' }
@@ -13,7 +24,8 @@ export async function apiRequest(path, { method = 'GET', body, token } = {}) {
   const data = await res.json().catch(() => ({}))
 
   if (!res.ok) {
-    throw new Error(data?.error?.message || 'Request failed')
+    // `fields` carries per-field validation messages (e.g. "address.pincode").
+    throw Object.assign(new Error(data?.error?.message || 'Request failed'), { fields: data?.error?.fields, status: res.status, code: data?.error?.code, retryAfter: retryAfterSeconds(res) })
   }
 
   return data

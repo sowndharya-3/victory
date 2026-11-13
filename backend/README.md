@@ -1,6 +1,6 @@
 # Backend
 
-PHP 8.2 + MySQL 8.0, no framework, no Composer. See
+PHP 8.4 (Docker image `php:8.4-fpm-trixie`, Debian 13, poppler-utils 25.03; previous 8.2 image kept locally as `vtee-php:8.2-trixie-rollback`) + MySQL 8.0, no framework, no Composer. See
 `docs/superpowers/specs/2026-10-08-backend-foundation-design.md` for the
 full design.
 
@@ -22,10 +22,64 @@ full design.
    fresh deploy won't have them yet, and this codebase can't create them for
    itself if the process lacks permission to do so.
 
+### Security headers (nginx)
+
+`backend/nginx/default.conf` adds to every PHP (API) response `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer`, `Cache-Control: no-store` and `Content-Security-Policy: default-src 'none';
+frame-ancestors 'none'`. Cache-Control and nosniff are defaults only (nginx `map` on the upstream header), so the reader
+page keeps its own `private, no-store` and nothing is sent twice; the public book list was never cacheable and is
+`no-store` too. `/uploads/` (covers, previews, the index PDF the frontend frames) gets nosniff and no-referrer only,
+never `X-Frame-Options`/`frame-ancestors`. `server_tokens off`, `X-Powered-By` hidden. HSTS is present but commented:
+enable it only once HTTPS works on that host (or on the TLS proxy), starting at `max-age=300`. The Apache `.htaccess`
+does not add these headers.
+
+### Apache hosting
+
+The recommended API host is a VPS running this Docker/nginx stack. For Apache/LiteSpeed (document root =
+`backend/public`, API at the root of its host) `backend/public/.htaccess` mirrors the nginx rules: front controller
+to `index.php` unless the request is an existing public file, 404 for `uploads/books/*/book.pdf`, any `uploads/.../pages/`
+path, dot-files and any PHP file other than `index.php`; no directory listings; no `Options` directives (they 500 on
+hosts without `AllowOverride Options`). It copies `Authorization` into the environment (`SetEnvIf` plus a rewrite
+fallback), and `AuthMiddleware` reads `HTTP_AUTHORIZATION`, then `REDIRECT_HTTP_AUTHORIZATION`, then
+`apache_request_headers()`/`getallheaders()` (case-insensitive); only a `Bearer` token is accepted. Check on the host:
+`curl -s https://<api>/api/me -H "Authorization: Bearer x"` must answer `invalid_token`, not `unauthorized`.
+
 ## Environment variables
 
 See `backend/.env.example` for the full list: `DB_HOST`, `DB_PORT`,
-`DB_NAME`, `DB_USER`, `DB_PASS`, `JWT_SECRET`, `FRONTEND_ORIGIN`.
+`DB_NAME`, `DB_USER`, `DB_PASS`, `JWT_SECRET`, `FRONTEND_ORIGIN`, plus the SP-5 keys
+`APP_ENV`, `RAZORPAY_GATEWAY` (`fake` is dev-only), `RAZORPAY_KEY_ID`,
+`RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `CODE_SECRET` (>=32 random bytes).
+These are validated lazily at use, so SP-4 endpoints work without them. Use placeholders
+in docs and commits; real values live only in `backend/.env` (gitignored).
+
+`APP_ENV` fails closed: only the exact values `development`, `dev`, `local`, `test`, `testing` count as dev;
+anything else (unset, `staging`, `Production`, values with spaces) is production. `RAZORPAY_GATEWAY=fake`
+(accepts forged signatures) is refused outside dev. In `live` mode (the default when `RAZORPAY_GATEWAY` is
+unset) `RAZORPAY_KEY_ID` must start `rzp_test_`/`rzp_live_`, and outside dev `RAZORPAY_KEY_SECRET` needs
+>= 20 chars and `RAZORPAY_WEBHOOK_SECRET` >= 32 chars, none containing a placeholder (`changeme`,
+`change-me`, `placeholder`, `your-`, ...). `JWT_SECRET` and `CODE_SECRET` need >= 32 chars and no
+placeholder in every environment. Errors name the variable, never its value. An empty
+`RAZORPAY_WEBHOOK_SECRET` is never accepted for signature checks. `.env.example` defaults to
+production + live; the local Docker test suite needs `APP_ENV=development` and `RAZORPAY_GATEWAY=fake`
+in `backend/.env`.
+
+Before every deploy run the config check (CLI only; prints PASS/WARN/FAIL per item, never a secret
+value; exit 1 on any FAIL): `docker compose exec -T php php scripts/check_config.php` (or
+`php backend/scripts/check_config.php`). It checks APP_ENV, gateway mode and key prefix, secret
+strength, `FRONTEND_ORIGIN` (bare https origin), DB reachability, migrations 001-008 (by schema),
+`storage/books` writable and outside the web root, `public/uploads` writable, `pdfinfo`/`pdftoppm`,
+`prlimit`.
+
+IP-based rate limits (login, admin login, code redeem, track, referral validate/apply) key on
+`App\Support\ClientIp::bucket()`: `REMOTE_ADDR`, IPv6 grouped per /64, IPv4-mapped IPv6 as IPv4. Optional
+`TRUSTED_PROXIES` (comma list of IPs/CIDRs, empty by default = `REMOTE_ADDR` only): `X-Forwarded-For` is read only
+when `REMOTE_ADDR` is in that list, right to left, taking the first address that is not a trusted proxy; anything
+malformed falls back to `REMOTE_ADDR`. Prefer fixing `REMOTE_ADDR` in the web server instead (commented
+`set_real_ip_from` example in `backend/nginx/default.conf`; Apache `mod_remoteip`). `check_config.php` prints an INFO
+line about it.
+
+Email/SMTP notifications are a later phase: nothing sends mail yet and there are no SMTP keys.
 
 ## Migrations
 
@@ -34,7 +88,30 @@ Apply the initial schema against the running stack:
 
 ```bash
 docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/001_init.sql
+# then 002_book_management.sql, 003_orders_payments.sql, 004_refunds.sql, 005_books_page_count.sql, 006_audit_logs_entity_index.sql, 007_commission_payable_at.sql and 008_partner_email_unique.sql, in order
 ```
+
+Migrations are one-shot: re-applying a file fails on "already exists" /
+duplicate column and changes no data. 003 to 008 are additive only; never drop the
+volume to re-run them. On an existing database, back up first and run the read-only
+`backend/scripts/premigration_checks.sql` (every query must return no rows: duplicate
+Razorpay ids that 003's unique keys would reject, duplicate partner / open-application
+emails that 008 would reject, orphan rows); fix the data before applying.
+Way back: `backend/migrations/ROLLBACK.md` has the rollback SQL for every migration (tested 008 down to 001 on a scratch database).
+
+008 adds `referral_partners.gmail_key` and `referral_applications.open_gmail` (STORED generated
+`LOWER(TRIM(gmail))`, utf8mb4_bin, the latter only while pending/approved) with UNIQUE keys: one partner
+per email and one open application per email, enforced by the database. Rejected emails may apply again.
+Phone, WhatsApp and UPI are deliberately not unique (families/institutions share them).
+
+## Contact form mail
+
+`POST /api/contact` sends through a small built-in SMTP client (`src/Mail/SmtpMailer.php`, no composer): set
+`CONTACT_TO_EMAIL`, `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_USER`, `SMTP_PASS`, `SMTP_SECURE`
+(`tls` = STARTTLS, `ssl` = implicit TLS, `none` = dev mail catcher only). `check_config.php` WARNs in dev and FAILs
+elsewhere when they are missing. Failures are logged as `contact: email delivery failed (<class>: <reply line>)`,
+never the credentials, addresses or message. Local check: run a mail catcher (e.g. mailpit) on the compose network and
+point `SMTP_HOST` at it with `SMTP_SECURE=none`.
 
 ## API endpoints
 
@@ -42,8 +119,8 @@ docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/
 |---|---|---|---|
 | GET | /api/health | none | DB connectivity check |
 | POST | /api/auth/register | none | `{name, email, phone?, password}` → 201 `{token, user}` or 409 if email taken |
-| POST | /api/auth/login | none | `{email, password}` → 200 `{token, user}` or 401 |
-| POST | /api/admin/login | none | `{username, password}` → 200 `{token, admin}` or 401 |
+| POST | /api/auth/login | none | `{email, password}` → 200 `{token, user}` or 401. Failed attempts limited to 10 / 15 min per account (normalised email, existing or not) and 30 / 15 min per IP → 429 `rate_limited` (successes are not counted) |
+| POST | /api/admin/login | none | `{username, password}` → 200 `{token, admin}` or 401. Failed attempts limited to 5 / 15 min per username and 15 / 15 min per IP (separate from customer buckets) → 429 `rate_limited` |
 
 | GET | /api/me | Bearer JWT, any role | returns the caller's own profile, shape depends on role |
 
@@ -52,9 +129,9 @@ docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/
 
 | GET | /api/admin/books | admin | All books, any status, with `hasCover/hasIndex/hasPdf/previewPageCount` |
 | GET | /api/admin/books/:id | admin | One book, any status |
-| POST | /api/admin/books | admin | `{title, description?, category?, onlinePrice, hardcopyPrice}` → 201 |
-| PUT | /api/admin/books/:id | admin | Partial update of any metadata field |
-| POST | /api/admin/books/:id/publish | admin | sets published=1 |
+| POST | /api/admin/books | admin | `{title, description?, category?, onlinePrice, hardcopyPrice}` → 201. Title 1–255 chars and category ≤100 (Unicode-trimmed, no control characters), description ≤65535 bytes UTF-8 (line breaks/tabs allowed), prices 0–100000 with ≤2 decimals (number or string); else 400 `validation_error` with `fields` |
+| PUT | /api/admin/books/:id | admin | Partial update `{title?, description?, category?, onlinePrice?, hardcopyPrice?}` (any subset; `category` ""/null clears it), same rules as create (body must be a JSON object); a published book cannot get a price below 1. A real price change writes audit `book.price` (`entity_type` `book`, detail `{onlinePrice?:{from,to}, hardcopyPrice?:{from,to}}`, rupee strings). Returns the admin book `{id,title,description,category,onlinePrice,hardcopyPrice,published,archived,hasCover,hasIndex,hasPdf,previewPageCount}` (prices as numbers) |
+| POST | /api/admin/books/:id/publish | admin | sets published=1; 400 `validation_error` unless both prices are ≥ 1 (a PDF is not required: it can be uploaded after publishing) |
 | POST | /api/admin/books/:id/unpublish | admin | sets published=0 |
 | POST | /api/admin/books/:id/archive | admin | sets archived=1, published=0 |
 | POST | /api/admin/books/:id/cover | admin | multipart `file` (image, max 5MB) → `{coverUrl}` |
@@ -62,6 +139,87 @@ docker compose exec -T mysql mysql -u vtee -pchangeme vtee < backend/migrations/
 | POST | /api/admin/books/:id/preview-pages/:pageNumber | admin | multipart `file` (image, max 5MB) → upserts that page, `{pageNumber, url}` |
 | DELETE | /api/admin/books/:id/preview-pages/:pageNumber | admin | removes that page's file and row, `{deleted: true}` |
 | POST | /api/admin/books/:id/pdf | admin | multipart `file` (PDF, max 50MB) → stores privately under `backend/storage/`, never publicly servable |
+
+| GET | /api/checkout/quote?bookId=&type= | none | `type` = `digital`\|`hardcopy` → `{bookId,purchaseType,currency,subtotal,shipping,gst,gstPercent,gstMode,total}` (rupees). 400 `validation_error`, 404 `not_found` (missing/unpublished/archived book) |
+| GET | /api/referral/validate/:code | none | `{valid:false}` or `{valid:true, partnerName:"A***"}` (masked). 30/min per IP → 429 `rate_limited` |
+| POST | /api/orders | customer | `{bookId, purchaseType, referralCode?, address? (hardcopy)}` → 201 order + `razorpay:{keyId,orderId,amount,currency}`; amounts are always computed server-side. 400 `validation_error`, 404 `not_found`, 409 `already_owned` (digital already bought/redeemed), 429 `rate_limited` (20/hour per user), 502 `gateway_error` |
+| POST | /api/orders/:id/verify | customer (owner) | `{razorpay_order_id, razorpay_payment_id, razorpay_signature}` → `{order}`; 200 paid/failed, 202 payment only authorized (webhook or reconcile finishes it). Status and amount are re-fetched from Razorpay, never trusted from the client. 400 `validation_error`/`payment_verification_failed`, 404 `not_found`, 409 `payment_amount_mismatch`, 502 `gateway_error` |
+| GET | /api/me/orders | customer | caller's orders, newest first |
+| GET | /api/me/orders/:id | customer (owner) | one order (hard copy includes its address); 404 `not_found` for anyone else's |
+| POST | /api/webhooks/razorpay | none (HMAC signature) | Razorpay server-to-server events, see "Razorpay webhook setup". `{status: ok\|ignored\|duplicate\|flagged}`; 400 `invalid_signature` / `validation_error` |
+| GET | /api/me/orders/:id/access-code | customer | `{code}` (`XXXX-XXXX-XXXX-XXXX`) while the paid digital order's code is unredeemed; else 404 |
+| POST | /api/me/redeem | customer | `{code}` → `{bookId, orderId}`; the only way digital access is granted. Errors `code_invalid` 400, `code_revoked`/`code_order_not_paid` 403, `code_already_redeemed`/`already_owned` 409. Failed attempts limited to 5/15 min per user, 20/15 min per IP (429) |
+| POST | /api/me/orders/:id/reissue-code | customer (owner) | revokes the current code (and any access it granted), returns a new `{code}`; 3/day. Only when the current code is active, redeemed by the buyer, or revoked for `customer_request`; otherwise `reissue_requires_admin` 403 (e.g. a gifted code redeemed by someone else, or an admin revoke) |
+| GET | /api/me/library | customer | `{books:[{bookId,title,coverUrl,orderId,purchasedAt,accessStatus}], pendingRedemptions:[{orderId,bookId,title,coverUrl,purchasedAt}]}` |
+| GET | /api/track/:trackingCode | none | hard-copy status `{orderNumber,bookTitle,status,label,updatedAt,courier?,trackingNumber?}`; never address, email or codes; 10/min per IP |
+| GET | /api/me/refunds | customer | caller's refunds (on their orders), newest first: `{id,orderId,status,reason,amount,createdAt,adminNote}` (`adminNote` only when `rejected`). Read-only: **customers cannot request refunds** (owner decision: no general refund for purchased books; genuine exceptions - duplicate payment, money deducted but failed, legal cases - are handled by an admin via `POST /api/admin/orders/:id/refund`). The former `POST /api/me/orders/:id/refund-request` is gone (404) |
+| GET | /api/admin/refunds?status= | admin | newest 200 refunds `[{id,orderId,orderNumber,purchaseType,userId,status,reason,adminNote,amount,razorpayRefundId,requestedByUserId,reviewedByAdminId,createdAt,updatedAt}]`; bad `status` → 400 |
+| POST | /api/admin/refunds/:id/approve | admin | `{note?}` → `{refund}` `refunded` (gateway processed) or `processing` (finalised by the `refund.processed` webhook); idempotent once processing/refunded. 404, 409 `invalid_transition` (rejected) / `not_refundable` / `refund_conflict`, 502 `gateway_error` (refund left `failed`; approve again retries) |
+| POST | /api/admin/refunds/:id/reject | admin | `{note}` required (1–500) → `{refund}` `rejected`; 409 `invalid_transition` once processing/refunded |
+| POST | /api/admin/orders/:id/refund | admin | `{reason}` → 201 `{refund}` opened as `approved` and processed at once; 200 with the existing refund if one is open (an open customer request is approved). 404, 409 `not_refundable`, 502 `gateway_error` |
+| GET | /api/books/:id/access | customer | `{owned, status: "active" / "revoked" / "none", pageCount?}` (`pageCount` only when active and the book has a usable PDF: an owner of a book without one gets `{owned:true,status:"active"}`; `Cache-Control: private, no-store`). 404 `not_found` (id not `[1-9][0-9]{0,8}`), 503 `render_busy` (PDF being replaced; `Retry-After`) |
+| GET | /api/books/:id/read/pages/:n | customer + active `book_access` | `image/jpeg` page `n` (1..pageCount), `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`. 403 `forbidden` (no or revoked access; admins too), 404 `not_found` (bad id / page out of range; digits only, no leading zero or trailing newline), 429 `rate_limited` (240 per 5 min per user), 500 `render_failed`, 503 `render_busy` + `Retry-After: 5` (another worker is rendering that page for > 10 s, or the PDF was replaced mid-request: retry) |
+| GET | /api/admin/dashboard | admin | `{publishedBooks, totalCustomers, digitalPurchases, hardcopyOrders, successfulPayments, pendingOrders, revenue, refundedAmount, pendingRefunds, commissionPending, commissionPayable}`. Purchases/revenue count `paid` orders only (revenue is net: refunded orders leave `paid`); `successfulPayments` = orders `paid` or `refunded`; `pendingOrders` = paid hard copies `confirmed`/`processing`; `pendingRefunds` = refunds `requested`/`approved`/`processing`; `commissionPending`/`commissionPayable` = ₹ sums by commission status. Amounts are ₹ numbers |
+| GET | /api/admin/orders?q=&type=&status=&fulfilment=&page=&perPage= | admin | `{items, page, perPage, total}`, newest first; `perPage` default 25, max 100. `q` (≤100 chars) matches order number / customer name / email / phone (substring, `%` `_` literal), tracking code (exact, any case), digital code last 4, or a pasted full code (exact, via its hash). Item: `{id, orderNumber, customer:{id,name,email}, book:{id,title}, purchaseType, status, amount, paidAt, createdAt, razorpayPaymentId, digitalCode:{status,last4}\|null, trackingCode, fulfilmentStatus, adminFlag}`. 400 `validation_error` (bad filter/page) |
+| GET | /api/admin/orders/:id | admin | list item + `customer.phone`, `breakdown:{subtotal,shipping,gst,gstPercent,gstMode,total,currency}`, `address` (hard copy, else null), `courier`, `trackingNumber`, `shippedAt`, `referralCode`, `refunds[]` (admin refund shape), `commission` (or null), `auditLog[]` (order, its codes and refunds). Never a plaintext code, `code_enc` or hash. 404 |
+| PUT | /api/admin/orders/:id/fulfilment | admin | `{status, courier?, trackingNumber?}` on paid hard-copy orders: `confirmed→processing→shipped→out_for_delivery→delivered` (`out_for_delivery` may be skipped), `cancelled` only from `shipped`/`out_for_delivery` and needs `reason` (1–255, kept in the audit row). `shipped` needs `courier` (1–100), sets `shipped_at`; `courier`/`trackingNumber` must not contain control characters. Checked under a row lock; writes an `order.fulfilment` audit row; customer `/api/me/orders/:id` and `/api/track/:code` show it at once. Returns the detail. 400 `invalid_transition` (illegal move, digital or unpaid order) / `validation_error`, 404, 409 `refund_required` when cancelling a `confirmed`/`processing` order: refund it with `POST /api/admin/orders/:id/refund` instead (completing the refund cancels fulfilment). Cancelling after shipping moves no money |
+| GET | /api/admin/customers?q=&page=&perPage= | admin | `{items:[{id,name,email,phone,createdAt,orderCount,paidTotal}], page, perPage, total}`; `q` matches name/email/phone |
+| GET | /api/admin/customers/:id | admin | customer + `orders[]` (newest 200, list item shape). 404 |
+| POST | /api/admin/codes/verify | admin | `{code}` → `{status, bookTitle, orderNumber, orderStatus, redeemed}` (hash lookup; never echoes the code). 404 unknown, 400 non-string. 30 per 10 min per admin (429) |
+| POST | /api/admin/orders/:id/code/revoke | admin | `{reason}` (1–255, not `customer_request`) revokes the order's current code (decided under the order lock) and any access it granted; returns the detail. 404 no code |
+| POST | /api/admin/orders/:id/code/reissue | admin | `{reason}` (1–255, not `customer_request`) revokes the current code and returns `{code}` (`Cache-Control: no-store`): the only admin response that ever contains a plaintext code; give it to the customer, it is not shown again. 404 (not a paid digital order). 30 per 10 min per admin (429) |
+| GET | /api/admin/audit-logs?entityType=&entityId=&page=&perPage= | admin | `{items:[{id,adminId,userId,action,entityType,entityId,detail,createdAt}], page, perPage, total}`, newest first |
+| POST | /api/contact | none | `{name (2-100), email (valid, <=254), phone? (digits, +, spaces; 7-20), subject? (<=150), message (10-5000), website}` -> 200 `{ok:true}` after the message was emailed to `CONTACT_TO_EMAIL` (Reply-To = visitor, From = `MAIL_FROM`; nothing is stored). `website` is a honeypot: non-empty -> 200 `{ok:true}` silently, nothing sent. 400 `validation_error` with `error.fields`; 429 `rate_limited` + `Retry-After: 3600` (5 well-formed submissions/hour per client IP); 413 body over 64 KB; 502 `email_failed` ("Could not send your message. Please try again later or email us directly.") whenever SMTP is unconfigured or delivery fails - never a success. CR/LF and other control characters are stripped from header fields (an email containing them is rejected) |
+| POST | /api/referral/applications | none | Partner sign-up `{name, qualification?, place?, district?, status (Student/Scholarship/Faculty/Institution), phone, whatsapp (10-digit Indian mobile, `+91`/spaces/dashes normalised), upiId? (name@bank or a 10-digit mobile), gmail}` (lengths per `referral_applications`; gmail lowercased) → 201 `{id, applicationStatus:"pending"}`. 400 `validation_error` with `fields`; 409 `duplicate_application` if that gmail has a pending/approved application (enforced by `uq_open_application`, so simultaneous submissions yield one 201 and 409s; a rejected gmail may apply again). Free text is Unicode-trimmed (NBSP counts as space) and control characters (NUL, CR/LF, ANSI escapes) or invalid UTF-8 are rejected. Body over 16 KB → 413 `payload_too_large`. 5 valid submissions per hour per IP (`ClientIp`, see Environment variables) → 429; the counter runs before the duplicate check, so a 409 duplicate uses budget, and the 409 does reveal that an email has applied (accepted: rate-limited, applicant-friendly) |
+| GET | /api/admin/referrals?status=&page=&perPage= | admin | `{applications:{items:[{id,name,qualification,place,district,status,phone,whatsapp,upiId,gmail,applicationStatus,reviewedAt,createdAt,partnerId}],page,perPage,total}, partners:[{id,applicationId,name,phone,whatsapp,upiId,gmail,referralCode,active,createdAt,updatedAt}]}`; `status` filters applications (pending/approved/rejected); partners unpaginated |
+| POST | /api/admin/referrals/:id/approve | admin | Only from `pending` (row-locked): creates the partner with `referral_code` `VTP-` + 6 random Crockford base32 chars (unique, retried on collision) → `{application, partner}`. 409 `duplicate_partner` if a partner already has that gmail (case/outer-space-insensitive; also when a concurrent approve/edit wins the race, via `uq_partner_gmail`); 400 `invalid_transition` otherwise, 404 |
+| POST | /api/admin/referrals/:id/reject | admin | `{reason?}` (≤500, audit only); only from `pending` → `{application}`; no partner row |
+| POST | /api/admin/partners/:id/toggle-active | admin | Flip `active` → partner. Inactive codes are unknown to validate/checkout; existing orders and commissions are untouched |
+| PUT | /api/admin/partners/:id | admin | Partial `{name?, phone?, whatsapp?, upiId?, gmail?}` (same rules as the application; `upiId` ""/null clears) → partner. Any other key → 400 (`referral_code`/`active` not editable here); gmail already used by another partner → 409 `duplicate_partner` |
+| GET | /api/admin/commissions?status=&partnerId=&page=&perPage= | admin | `{items:[{id,orderId,orderNumber,partner:{id,name,referralCode,active},purchaseType,amount,status,payoutReference,payableAt,paidAt,clawbackDue,reversedAt,createdAt}], page, perPage, total, totals:{pending,payable,paid,reversed,clawbackDue:{count,amount}}}`; totals honour `partnerId` only. Amounts are `"25.00"` strings |
+| POST | /api/admin/commissions/:id/payable | admin | `pending` → `payable` (`payable_at`) → commission. Anything else 400 `invalid_transition` (`reversed` can never be paid). No payout hold and no waiting period: commissions are eligible as soon as the order is paid (Rs 25 per online and per hard-copy sale unless an admin changes the rate; the amount is snapshotted at payment) |
+| POST | /api/admin/commissions/:id/paid | admin | `{payoutReference}` (required, 1–100 of letters, digits, space `. / # : _ -`) ; `payable` → `paid` (`paid_at`) → commission. 400 `validation_error` / `invalid_transition` |
+| GET / PUT | /api/admin/settings/commission | admin | `{digital, hardcopy}` flat ₹ per paid referral order, `"25.00"` strings; PUT needs both, 0–10000 with ≤2 decimals (string or number). Applies to orders paid afterwards only: amounts are snapshotted by `markPaid` |
+| GET / PUT | /api/admin/settings/pricing | admin | `{shippingChargeDigital, shippingChargeHardcopy, gstPercentDigital, gstPercentHardcopy, gstMode}` (U1/U2). PUT is partial: shipping 0–10000 ₹, GST 0–100 %, ≤2 decimals, `gstMode` inclusive/exclusive; unknown keys / empty body 400. Applies to new quotes/orders only |
+
+Access codes are stored as HMAC-SHA256 (pepper from `CODE_SECRET`) plus last 4 chars; the plaintext is kept
+AES-256-GCM-encrypted (order id as AAD, so a blob copied to another order won't decrypt) only until redeemed. Rotating `CODE_SECRET` invalidates every unredeemed code.
+
+Refunds are exceptional, admin-initiated, full refunds only, for the captured `payments.amount` (never a client value); nothing refunds or revokes access automatically (the webhook/cron only record what an admin already started, or flag unmatched gateway refunds in `orders.admin_flag`). `requested` rows exist only from before customer requests were removed. States:
+`requested` → `approved` → `processing` → `refunded`, or `rejected` / `failed`. One open refund per order is
+enforced by the database (`UNIQUE(order_id, is_open)`). The Razorpay call (`receipt` = `refund_<id>`) runs under
+a row lock on the refund, so two approvals can't both refund. On `refunded` (one transaction): payment and order
+`refunded`; digital: the order's current code `revoked` (reason `refund`) and its redeemer's `book_access.revoked_at`
+set; hard copy: fulfilment `cancelled` unless already shipped/out for delivery/delivered (then unchanged and an
+`refund.already_shipped` audit row); commissions are never changed by a refund (owner decision: no automatic reversal or clawback); finalise only writes a
+`refund.commission_unchanged` audit row (`orderId, commissionId, status, amount`) so admins can see which commissions belong to
+refunded orders. The `reversed` status and `reversed_at`/`clawback_due` columns remain (legacy values only; nothing sets them). A refunded order is never re-fulfilled. Every admin action writes `audit_logs` (`entity_type='refund'`).
+
+Referral/commission admin actions are audited too: `referral.approve`/`referral.reject` (`referral_application`), `partner.toggle_active`/`partner.update` (`referral_partner`, from/to), `commission.payable`/`commission.paid` (`commission`), `settings.commission`/`settings.pricing` (`settings`, from/to). Commission rows are created only by `markPaid`; rate changes, partner edits and deactivation never touch existing rows. Attribution is snapshotted on the order at creation, so a deactivated partner still earns on orders created before deactivation once they are paid. There is no payout hold: payable/paid never wait on a refund. A refund of an exceptional order does not touch its commission at all (see the refund section; an audit row records it).
+
+Secure reader: the PDF stays in `storage/books/{id}/book.pdf` (outside the web root, no route; nginx also 404s `/uploads/books/*/book.pdf` and `/uploads/books/*/pages/`). Pages are rendered lazily with Poppler (`poppler-utils`: `pdfinfo`, `pdftoppm -jpeg -r 110`, argument-array `proc_open`, temp file + atomic rename) into `storage/books/{id}/pages/{n}.jpg`; the page count is cached in `books.page_count`. Limits, sized for PHP-FPM `pm.max_children=5`: each tool run has a 30 s wall clock (SIGKILL + reap) and runs under `prlimit` (1 GiB address space, CPU = 30 s, 64 MB output file); a page is only rendered if `pdfinfo` reports it at most 5000 pt a side and 12 MP at 110 dpi; the page count must be 1..5000 (last anchored `Pages:` line, so a crafted Title cannot spoof it); a request waits at most 10 s for another worker rendering the same page (non-blocking `flock` polling), then 503 `render_busy`; a failed page or page count is remembered for 60 s (`*.failed` marker) instead of re-running the tools. Only valid page numbers (1..page count) can create cache files. A new PDF upload is written to a temp file in the same directory and renamed over `book.pdf`, then clears the page count, pages, failure markers and render temp files; `page_count` is only stored while NULL and only if the PDF's inode/size/mtime did not change during `pdfinfo`, and a page rendered from a PDF replaced mid-render is discarded (503 `render_busy`). Render errors return a generic `render_failed` (ids and exit code logged, never paths or stderr). Access = a non-revoked `book_access` row for the caller; a book later unpublished/archived stays readable by its owners. The public index/preview images are unchanged SP-4 uploads and never include reader pages. Production image needs `poppler-utils`.
+
+Common error shape: `{"error":{"code":"...","message":"...","fields"?:{...}}}`. Other codes seen across
+the API: `unauthorized` 401, `forbidden` 403 (wrong role), `not_found` 404, `validation_error` 400,
+`rate_limited` 429, `invalid_transition` 400 (admin fulfilment, referral applications, commissions; 409 on refunds), `refund_required` 409 (admin cancel of an unshipped paid hard copy), `duplicate_application` / `duplicate_partner` 409, `payload_too_large` 413, `render_failed` 500 (reader), `render_busy` 503 (reader, with `Retry-After`), `rate_limited` 429 also on both logins, `server_error` 500 (generic body; the class and message are written to the PHP error log).
+
+### Razorpay webhook setup
+
+1. In the Razorpay dashboard (Settings > Webhooks) add a webhook with URL
+   `https://<your-domain>/api/webhooks/razorpay` and active events `payment.captured`,
+   `payment.failed`, `refund.processed` and `refund.failed` (other events are accepted and ignored). `refund.processed`
+   finalises our refund matched by refund id (or by payment id if the id was never stored, preferring the order's
+   open refund) when the amount is the full refund. A `refund.processed` for an unknown refund on one of our payments
+   (e.g. refunded in the dashboard) or for a different amount (partial) is `flagged`: one `refund.external_unmatched`
+   audit row (entity `order`, detail `{refundId, paymentId, amountPaise, reason}`) and `orders.admin_flag =
+   'refund_external_unmatched'` unless a flag is already set. It never revokes access, cancels fulfilment or touches
+   commissions (refund policy is on hold: an admin decides). A payment that is not ours is `ignored`; all logged (ids only).
+   `refund.failed` moves a `processing` refund to `failed` (approve again retries); nothing else changes.
+2. Enter a webhook secret there and set the same value as `RAZORPAY_WEBHOOK_SECRET` in `backend/.env`.
+3. Requests must carry `X-Razorpay-Signature` (HMAC-SHA256 of the raw body) and `X-Razorpay-Event-Id`
+   (used for idempotency; a repeated id returns `duplicate`). A bad signature is 400 `invalid_signature`.
+4. Local testing: expose `localhost:8080` with a tunnel (e.g. `ngrok http 8080`) and use the
+   `https://<tunnel-host>/api/webhooks/razorpay` URL in a test-mode webhook.
 
 ### Creating the first admin
 
@@ -72,6 +230,45 @@ one via the CLI:
 docker compose exec -T php php scripts/seed_admin.php <username> <password>
 ```
 
+### Reconciling pending orders (cron)
+
+`scripts/reconcile_orders.php` fulfils pending orders (older than 15 min) that
+Razorpay reports captured, via the normal paid path; cancels pending orders
+older than 24 h with no capture (payment `failed`, reason `expired`); re-checks
+`failed`/`cancelled` orders from the last 7 days and fulfils any Razorpay reports
+captured (e.g. a retry succeeded but the webhook was lost; nothing else is changed
+on those orders); settles refunds whose webhook was lost (below); and purges `rate_limits` rows older than 2 days.
+It prints `paid=N cancelled=N errors=N purged=N refunds_finalised=N refunds_failed=N refunds_flagged=N` and exits `0`
+on success, `2` if any order or refund errored (counts still printed; see the log for details), `3` if there were no
+errors but a refund was newly flagged `refund_external_unmatched` (needs an admin), `1` on a fatal error. Alert on any
+non-zero exit.
+
+Refund pass (`OrderReconciler::reconcileRefunds`, at most 30 gateway calls per run, oldest first), only through the
+existing `RefundService::finalise()` / `markFailed()` paths (idempotent, refund row locked first):
+- `processing` refunds older than 10 min: `GET /v1/refunds/{id}`; `processed` for the full amount → finalised,
+  `failed` → `failed` (approve again retries), `pending` → next run.
+- `failed` refunds with no Razorpay refund id (the approve call errored or timed out, possibly after Razorpay refunded),
+  order still `paid`, failed 10 min to 7 days ago: `GET /v1/payments/{id}/refunds`; a `processed` refund for the full
+  amount whose id is not stored on another row → finalised with that id.
+- A `processed` refund for any other amount is never finalised; it is flagged like the webhook case above.
+The real Razorpay calls (`RazorpayGateway::fetchRefund` / `listRefundsForPayment`) are UNVERIFIED until the Razorpay
+test-mode run; tests use the scriptable `FakeGateway`. Refunds made entirely outside the app with no webhook at all are
+not discovered by the cron (no account-wide refund listing yet): reconcile those by hand from the Razorpay dashboard.
+
+An order flagged `admin_flag = amount_mismatch` (captured amount differs from the
+order) stays `pending` and is re-polled every run until an admin resolves it. `admin_flag` values (shown as the
+`adminFlag` badge in the admin order list and detail): `amount_mismatch`, `currency_mismatch` (the captured payment's
+currency is not INR, or missing: verify, webhook and cron all pass the gateway's `currency`; treated like an amount
+mismatch, never paid), `duplicate_payment`, `refund_external_unmatched`.
+A flag is never overwritten; later events only add audit rows.
+
+Run it every 15 minutes, with `flock -n` so a slow run is never overlapped:
+
+```cron
+*/15 * * * * cd /path/to/vtee && flock -n /tmp/vtee-reconcile.lock docker compose exec -T php php scripts/reconcile_orders.php >> /var/log/vtee-reconcile.log 2>&1
+# without Docker: */15 * * * * cd /path/to/vtee/backend && flock -n /tmp/vtee-reconcile.lock php scripts/reconcile_orders.php >> /var/log/vtee-reconcile.log 2>&1
+```
+
 ## Test results
 
 See `backend/TEST_RESULTS.md` for the actual captured output of the last
@@ -79,5 +276,7 @@ full test run:
 
 - `backend/tests/jwt_test.php` + `backend/tests/http_test.sh` — auth/health foundation
 - `backend/tests/upload_validator_test.php` + `backend/tests/book_test.sh` — book management (create → publish → cover/index/preview-pages/PDF uploads → public response shape/privacy → edit/unpublish/archive → role separation → invalid-file rejection)
+
+- `backend/tests/{money_pricing,address_validator,signature_gateway (incl. the APP_ENV x gateway x secrets matrix),order_fulfillment,codes,reconciler,race,middleware,refund,reader,admin_authz,commission}_test.php` + `backend/tests/order_test.sh` — SP-5 orders, Razorpay, access codes, tracking, reconcile, refunds, secure reader, admin API, referral partners and commissions (run the PHP ones with `docker compose exec -T php php tests/<file>.php`)
 
 Re-run any of them against a live `docker compose up` stack any time to re-verify.

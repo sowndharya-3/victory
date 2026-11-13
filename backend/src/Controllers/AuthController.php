@@ -6,6 +6,8 @@ use App\Auth\Jwt;
 use App\Auth\Password;
 use App\Database\Db;
 use App\Http\ApiException;
+use App\Support\ClientIp;
+use App\Support\RateLimiter;
 use App\Validation\Validator;
 use PDOException;
 
@@ -65,15 +67,22 @@ class AuthController
 
         Validator::required($data, ['email', 'password']);
 
-        $db = Db::connection();
-        $stmt = $db->prepare('SELECT id, name, email, password_hash FROM users WHERE email = :email');
-        $stmt->execute(['email' => $data['email']]);
-        $user = $stmt->fetch();
-
-        $passwordMatches = Password::verifyAgainstUserOrDummy($data['password'], $user['password_hash'] ?? null);
-        if (!$user || !$passwordMatches) {
-            throw new ApiException('Invalid email or password', 401, 'invalid_credentials');
-        }
+        // Failed attempts only, per account (hashed normalised email, existing or not) and per IP.
+        $account = sha1(strtolower(trim(is_string($data['email']) ? $data['email'] : '')));
+        $user = RateLimiter::failuresOnly(
+            ['login-user:' . $account => 10, 'login-ip:' . ClientIp::bucket() => 30],
+            900,
+            function () use ($data) {
+                $stmt = Db::connection()->prepare('SELECT id, name, email, password_hash FROM users WHERE email = :email');
+                $stmt->execute(['email' => $data['email']]);
+                $user = $stmt->fetch();
+                $passwordMatches = Password::verifyAgainstUserOrDummy($data['password'], $user['password_hash'] ?? null);
+                if (!$user || !$passwordMatches) {
+                    throw new ApiException('Invalid email or password', 401, 'invalid_credentials');
+                }
+                return $user;
+            }
+        );
 
         $token = Jwt::encode(['sub' => (int)$user['id'], 'role' => 'customer'], 7 * 24 * 60 * 60);
 

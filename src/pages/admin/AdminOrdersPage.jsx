@@ -1,44 +1,97 @@
 import { useState } from 'react'
-import { useSession } from '../../context/SessionContext'
+import { fetchAdminOrders, formatRupees } from '../../api/admin'
+import { useLoad, LoadState, Table, label } from './adminUi'
+import AdminOrderDetail from './AdminOrderDetail'
+
+const STATUSES = ['pending', 'paid', 'failed', 'cancelled', 'refunded']
+const FULFILMENT = ['confirmed', 'processing', 'shipped', 'out_for_delivery', 'delivered', 'cancelled', 'not_applicable']
+
+// A full access code would end up in the GET query string (and server logs): send admins to Verify instead.
+const looksLikeFullCode = (v) => /^[A-Z0-9]{4,}(-[A-Z0-9]{4,}){2,}$/i.test(v) || /^[A-Z0-9]{16,}$/i.test(v)
+
+const FLAG_TEXT = {
+  currency_mismatch: ['Currency mismatch', 'The payment was captured in a different currency than the order. Check it in Razorpay before fulfilling.'],
+  refund_external_unmatched: ['Refund not matched', 'A refund was made outside this system (e.g. in Razorpay) and could not be matched to a recorded refund. Reconcile it manually.'],
+}
+const flagText = (f) => FLAG_TEXT[f] ?? [label(f), label(f)]
 
 function AdminOrdersPage() {
-  const { state } = useSession()
-  const [typeFilter, setTypeFilter] = useState('all')
+  const [search, setSearch] = useState('')
+  const [searchHint, setSearchHint] = useState('')
+  const [filters, setFilters] = useState({ q: '', type: '', status: '', fulfilment: '', page: 1 })
+  const [selectedId, setSelectedId] = useState(null)
+  const { data, error, loading, reload } = useLoad(() => fetchAdminOrders(filters), [filters])
 
-  const filtered = state.orders.filter(o => typeFilter === 'all' || o.purchaseType === typeFilter)
+  const setFilter = (key) => (e) => setFilters(f => ({ ...f, [key]: e.target.value, page: 1 }))
+  const items = data?.items ?? []
+  const lastPage = data ? Math.max(1, Math.ceil(data.total / data.perPage)) : 1
 
   return (
     <div>
       <h2>Orders</h2>
-      <label htmlFor="type-filter">Filter by type</label>
-      <select id="type-filter" value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
-        <option value="all">All</option>
-        <option value="digital">Digital</option>
-        <option value="hardcopy">Hard Copy</option>
-      </select>
+      <form className="admin-filters" onSubmit={e => {
+        e.preventDefault()
+        const q = search.trim()
+        if (looksLikeFullCode(q)) {
+          setSearchHint('That looks like a full access code. Open the order and use the code panel to verify it; search by the last 4 characters instead.')
+          return
+        }
+        setSearchHint('')
+        setFilters(f => ({ ...f, q, page: 1 }))
+      }}>
+        <label htmlFor="order-search">Search</label>
+        <input id="order-search" className="form-control" placeholder="Order no., name, email, phone, tracking code or code last 4"
+          value={search} onChange={e => setSearch(e.target.value)} maxLength={100} autoComplete="off" />
+        <button type="submit" className="btn btn-primary">Search</button>
+        <label htmlFor="type-filter">Type</label>
+        <select id="type-filter" value={filters.type} onChange={setFilter('type')}>
+          <option value="">All</option>
+          <option value="digital">Digital</option>
+          <option value="hardcopy">Hard copy</option>
+        </select>
+        <label htmlFor="status-filter">Payment</label>
+        <select id="status-filter" value={filters.status} onChange={setFilter('status')}>
+          <option value="">All</option>
+          {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <label htmlFor="fulfilment-filter">Fulfilment</label>
+        <select id="fulfilment-filter" value={filters.fulfilment} onChange={setFilter('fulfilment')}>
+          <option value="">All</option>
+          {FULFILMENT.map(s => <option key={s} value={s}>{label(s)}</option>)}
+        </select>
+      </form>
+      {searchHint && <p role="alert" className="form-error">{searchHint}</p>}
 
-      <table>
-        <thead>
-          <tr><th>Order</th><th>Book</th><th>Customer</th><th>Type</th><th>Status</th><th>Amount</th><th>Referral</th></tr>
-        </thead>
-        <tbody>
-          {filtered.map(order => {
-            const book = state.books.find(b => b.id === order.bookId)
-            const partner = state.referralPartners.find(p => p.id === order.referralPartnerId)
-            return (
-              <tr key={order.id}>
-                <td>{order.id}</td>
-                <td>{book?.title}</td>
-                <td>{order.customerEmail}</td>
-                <td>{order.purchaseType}</td>
-                <td>{order.paymentStatus}</td>
-                <td>₹{order.amount}</td>
-                <td>{partner?.name ?? '—'}</td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
+      <LoadState loading={loading} error={error} empty={!items.length} emptyText="No orders match." />
+      {items.length > 0 && (
+        <Table head={['Order', 'Customer', 'Book', 'Type', 'Payment', 'Fulfilment', 'Code', 'Amount', 'Created', '']}>
+          {items.map(o => (
+            <tr key={o.id} className={o.id === selectedId ? 'is-selected' : undefined}>
+              <td>{o.orderNumber}{o.adminFlag && <span className="admin-badge" title={flagText(o.adminFlag)[1]}>{flagText(o.adminFlag)[0]}</span>}</td>
+              <td>{o.customer?.name}<br /><small>{o.customer?.email}</small></td>
+              <td>{o.book?.title}</td>
+              <td>{o.purchaseType === 'hardcopy' ? 'Hard copy' : 'Digital'}</td>
+              <td>{o.status}</td>
+              <td>{o.purchaseType === 'hardcopy' ? label(o.fulfilmentStatus) : '—'}</td>
+              <td>{o.digitalCode ? `${o.digitalCode.status} ····${o.digitalCode.last4}` : '—'}</td>
+              <td>{formatRupees(o.amount)}</td>
+              <td>{o.createdAt}</td>
+              <td><button type="button" onClick={() => setSelectedId(o.id)}>View</button></td>
+            </tr>
+          ))}
+        </Table>
+      )}
+      {data && data.total > data.perPage && (
+        <p className="admin-pager">
+          <button type="button" disabled={filters.page <= 1} onClick={() => setFilters(f => ({ ...f, page: f.page - 1 }))}>Previous</button>
+          <span> Page {filters.page} of {lastPage} </span>
+          <button type="button" disabled={filters.page >= lastPage} onClick={() => setFilters(f => ({ ...f, page: f.page + 1 }))}>Next</button>
+        </p>
+      )}
+
+      {selectedId && (
+        <AdminOrderDetail key={selectedId} orderId={selectedId} onClose={() => setSelectedId(null)} onChanged={reload} />
+      )}
     </div>
   )
 }

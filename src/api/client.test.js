@@ -25,6 +25,14 @@ test('apiRequest throws the backend error message on failure', async () => {
   await expect(apiRequest('/api/auth/login', { method: 'POST', body: {} })).rejects.toThrow('Invalid email or password')
 })
 
+test('apiRequest attaches backend validation fields to the thrown error', async () => {
+  mockFetch({ error: { code: 'validation_error', message: 'Validation failed', fields: { 'address.pincode': 'Invalid' } } }, false, 400)
+  await expect(apiRequest('/api/orders', { method: 'POST', body: {} })).rejects.toMatchObject({
+    message: 'Validation failed',
+    fields: { 'address.pincode': 'Invalid' },
+  })
+})
+
 test('apiRequest sends Authorization header when token is provided', async () => {
   mockFetch({ role: 'customer' })
   await apiRequest('/api/me', { token: 'my-token' })

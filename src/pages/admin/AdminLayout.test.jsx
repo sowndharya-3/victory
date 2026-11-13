@@ -28,3 +28,28 @@ test('shows login form, then nav after real admin login succeeds', async () => {
     expect(screen.getByText(/dashboard content/i)).toBeInTheDocument()
   })
 })
+
+test('a 401 from any admin call clears the admin session and shows the login screen', async () => {
+  const { default: AdminDashboardPage } = await import('./AdminDashboardPage')
+  localStorage.setItem('vtee-admin-token', 'stale-token')
+  localStorage.setItem('vtee-session', JSON.stringify({ customerEmail: null, admin: { username: 'admin' } }))
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+    ok: false, status: 401, json: async () => ({ error: { code: 'unauthorized', message: 'Unauthorized' } }),
+  })
+
+  render(
+    <SessionProvider>
+      <MemoryRouter initialEntries={['/admin']}>
+        <Routes>
+          <Route path="/admin" element={<AdminLayout />}>
+            <Route index element={<AdminDashboardPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </SessionProvider>
+  )
+
+  expect(await screen.findByLabelText(/username/i)).toBeInTheDocument()
+  expect(localStorage.getItem('vtee-admin-token')).toBe(null)
+  vi.restoreAllMocks()
+})

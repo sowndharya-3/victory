@@ -19,6 +19,8 @@ class ErrorHandler
             }
             echo json_encode($body);
         } catch (Throwable $e) {
+            // Class + message only: never the request body, payload or secrets.
+            error_log(get_class($e) . ': ' . $e->getMessage());
             http_response_code(500);
             echo json_encode(['error' => ['code' => 'server_error', 'message' => 'Something went wrong']]);
         }

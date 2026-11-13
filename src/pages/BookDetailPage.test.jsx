@@ -17,19 +17,7 @@ function renderAt(path) {
   )
 }
 
-test('shows Purchase button and no Read button when not purchased', () => {
-  renderAt('/books/b1')
-  expect(screen.getByRole('link', { name: /purchase/i })).toBeInTheDocument()
-  expect(screen.queryByRole('link', { name: /read book/i })).not.toBeInTheDocument()
-})
-
-test('treats an unpublished book as not found', () => {
-  renderAt('/books/b3') // b3 is seeded as published: false
-  expect(screen.getByText(/book not found/i)).toBeInTheDocument()
-  expect(screen.queryByRole('link', { name: /purchase/i })).not.toBeInTheDocument()
-})
-
-test('falls back to fetchBook for a real (non-mock) id and renders it', async () => {
+test('loads the book from the API and renders it', async () => {
   vi.spyOn(booksApi, 'fetchBook').mockResolvedValue({
     id: 6,
     title: 'Real Backend Book',
@@ -51,7 +39,7 @@ test('falls back to fetchBook for a real (non-mock) id and renders it', async ()
   expect(screen.getByRole('link', { name: /purchase/i })).toBeInTheDocument()
 })
 
-test('shows Book not found when fetchBook rejects for a real id', async () => {
+test('shows Book not found when fetchBook rejects ', async () => {
   vi.spyOn(booksApi, 'fetchBook').mockRejectedValue(new Error('Book not found'))
 
   renderAt('/books/999')

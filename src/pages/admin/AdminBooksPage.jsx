@@ -10,11 +10,17 @@ function AdminBooksPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
   const [title, setTitle] = useState('')
   const [onlinePrice, setOnlinePrice] = useState('')
   const [hardCopyPrice, setHardCopyPrice] = useState('')
   const [editingId, setEditingId] = useState(null)
   const [editTitle, setEditTitle] = useState('')
+  const [editDescription, setEditDescription] = useState('')
+  const [editCategory, setEditCategory] = useState('')
+  const [editOnline, setEditOnline] = useState('')
+  const [editHardcopy, setEditHardcopy] = useState('')
+  const [fieldErrors, setFieldErrors] = useState({})
 
   const load = async () => {
     setLoading(true)
@@ -56,14 +62,38 @@ function AdminBooksPage() {
   const startEdit = (book) => {
     setEditingId(book.id)
     setEditTitle(book.title)
+    setEditDescription(book.description || '')
+    setEditCategory(book.category || '')
+    setEditOnline(book.onlinePrice ?? '')
+    setEditHardcopy(book.hardcopyPrice ?? '')
+    setFieldErrors({})
   }
 
-  const handleSaveEdit = (e) => {
+  const handleSaveEdit = async (e) => {
     e.preventDefault()
-    withBusy(async () => {
-      await updateBook(token, editingId, { title: editTitle })
+    const errs = {}
+    const book = books.find(b => b.id === editingId)
+    for (const [key, v] of [['onlinePrice', editOnline], ['hardcopyPrice', editHardcopy]]) {
+      const n = Number(v)
+      if (String(v).trim() === '' ? book?.published : !(n >= 1)) errs[key] = 'Enter a price of at least 1'
+    }
+    setFieldErrors(errs)
+    if (Object.keys(errs).length) return
+    setBusy(true)
+    setError('')
+    try {
+      const changes = { title: editTitle, description: editDescription, category: editCategory.trim() || null }
+      if (String(editOnline).trim() !== '') changes.onlinePrice = String(editOnline).trim()
+      if (String(editHardcopy).trim() !== '') changes.hardcopyPrice = String(editHardcopy).trim()
+      await updateBook(token, editingId, changes)
       setEditingId(null)
-    })
+      await load()
+    } catch (err) {
+      setFieldErrors(err.fields ?? {})
+      setError(err.fields ? '' : err.message)
+    } finally {
+      setBusy(false)
+    }
   }
 
   const handleFileChange = (book, kind) => (e) => {
@@ -97,18 +127,33 @@ function AdminBooksPage() {
         <button type="submit" className="btn btn-primary" disabled={busy}>Add Book</button>
       </form>
 
+      <label className="admin-check"><input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} /> Show archived</label>
+      <div className="admin-table-wrap">
       <table>
         <thead>
           <tr><th>Title</th><th>Status</th><th>Files</th><th>Actions</th></tr>
         </thead>
         <tbody>
-          {books.map(book => (
+          {books.filter(b => showArchived || !b.archived).map(book => (
             <tr key={book.id}>
               <td>
                 {editingId === book.id ? (
                   <form onSubmit={handleSaveEdit}>
                     <label htmlFor={`edit-title-${book.id}`}>Edit Title</label>
                     <input id={`edit-title-${book.id}`} className="form-control" value={editTitle} onChange={e => setEditTitle(e.target.value)} required />
+                    <label htmlFor={`edit-description-${book.id}`}>Edit Description</label>
+                    <textarea id={`edit-description-${book.id}`} className="form-control" rows={4} value={editDescription} onChange={e => setEditDescription(e.target.value)} />
+                    {fieldErrors.title && <p className="form-error">{fieldErrors.title}</p>}
+                    {fieldErrors.description && <p className="form-error">{fieldErrors.description}</p>}
+                    <label htmlFor={`edit-category-${book.id}`}>Category</label>
+                    <input id={`edit-category-${book.id}`} className="form-control" value={editCategory} onChange={e => setEditCategory(e.target.value)} />
+                    {fieldErrors.category && <p className="form-error">{fieldErrors.category}</p>}
+                    <label htmlFor={`edit-online-${book.id}`}>Edit Online Price</label>
+                    <input id={`edit-online-${book.id}`} inputMode="decimal" className="form-control" value={editOnline} onChange={e => setEditOnline(e.target.value)} />
+                    {fieldErrors.onlinePrice && <p className="form-error">{fieldErrors.onlinePrice}</p>}
+                    <label htmlFor={`edit-hardcopy-${book.id}`}>Edit Hard Copy Price</label>
+                    <input id={`edit-hardcopy-${book.id}`} inputMode="decimal" className="form-control" value={editHardcopy} onChange={e => setEditHardcopy(e.target.value)} />
+                    {fieldErrors.hardcopyPrice && <p className="form-error">{fieldErrors.hardcopyPrice}</p>}
                     <button type="submit" disabled={busy}>Save Changes</button>
                     <button type="button" onClick={() => setEditingId(null)}>Cancel</button>
                   </form>
@@ -152,6 +197,7 @@ function AdminBooksPage() {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }

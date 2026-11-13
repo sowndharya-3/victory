@@ -13,7 +13,7 @@ function MissionVision() {
               <i className="fas fa-bullseye"></i>
             </div>
             <h3>Our Mission</h3>
-            <p>To provide world-class educational services with personalized approach and professional ethics, making quality education accessible to all. We aim to empower individuals through comprehensive educational solutions, career guidance, and skill development.</p>
+            <p>To provide educational services with personalized approach and professional ethics, making quality education accessible to all. We aim to empower individuals through comprehensive educational solutions, career guidance, and skill development.</p>
           </div>
 
           <div className="vision-card slide-in-right">

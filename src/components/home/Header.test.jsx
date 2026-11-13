@@ -16,3 +16,8 @@ test('renders Books and referral nav links', () => {
   expect(screen.getByRole('link', { name: 'Books' })).toHaveAttribute('href', '/books')
   expect(screen.getByRole('link', { name: /become a referral partner/i })).toHaveAttribute('href', '/referral/register')
 })
+
+test('renders Track Order nav link', () => {
+  render(<MemoryRouter><Header /></MemoryRouter>)
+  expect(screen.getByRole('link', { name: 'Track Order' })).toHaveAttribute('href', '/track')
+})

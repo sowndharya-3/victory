@@ -1,13 +1,19 @@
-# Pinned to bullseye (not the current bookworm-based php:8.2-fpm) because
-# this dev host's Docker containerd snapshotter cannot run the bookworm
-# image at all — every binary in it fails with "exec format error" despite
-# correct amd64/linux metadata and a verified-clean re-pull (isolated via
-# testing alpine/hello-world, which run fine on the same daemon). Same PHP
-# 8.2, same extensions. Local dev only — do not ship bullseye to production
-# without checking it still receives security patches.
-FROM php:8.2-fpm-bullseye
+# Debian 13 "trixie" (security support until ~2028-08, LTS to ~2030) replaces Debian 11 bullseye (EOL,
+# packages only on archive.debian.org). The old bullseye pin worked around a dev-host containerd
+# "exec format error" with bookworm images; that no longer reproduces (bookworm/trixie images run).
+# PHP 8.4 (security support to 2028-12-31). The earlier blocker was only in two CLI test harnesses
+# (admin_authz_test.php, middleware_test.php echo before controllers call http_response_code(), which PHP 8.3+
+# ignores once output is sent); they now buffer their output. curl_close()/finfo_close() are deprecated from 8.5 only.
+# Rollback: the previous 8.2 image is tagged vtee-php:8.2-trixie-rollback, or set this line back to php:8.2-fpm-trixie.
+FROM php:8.4-fpm-trixie
 
 RUN docker-php-ext-install pdo pdo_mysql
+
+# poppler-utils: pdfinfo + pdftoppm for the secure reader (private PDF -> page JPEGs).
+# prlimit (util-linux, already in the base image) caps their memory/CPU (see PdfPageRenderer).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY php/uploads.ini /usr/local/etc/php/conf.d/uploads.ini
 
